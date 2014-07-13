@@ -65,7 +65,7 @@ class Tile:
 		return self.basic in [self.BLANK, self.DOOR, self.ROOM, self.MAGIC_BARRIER, self.START, self.DESTINATION]
 
 	def is_transparent(self):
-		return self.basic in [self.BLANK, self.ROOM, self.GLASS]
+		return self.basic in [self.BLANK, self.ROOM, self.GLASS, self.START, self.DESTINATION]
 
 item_class_list = []
 def item(cls):
@@ -352,17 +352,18 @@ for index in (1, 3, 5, 7):
 direction_mapping = {ord("w"): (0, -1), ord("a"): (-1, 0), ord("s"): (0, 1), ord("d"): (1, 0)}
 
 class World:
-	GAP_PROPORTION   = 0.07
-	DOOR_PROPORTION  = 0.2
-	GOLD_PROPORTION  = 0
-	ROOM_PROPORTION  = 0.035
-	GLASS_PROPORTION = 0.002
+	GAP_PROPORTION    = 0.07
+	DOOR_PROPORTION   = 0.2
+	GOLD_PROPORTION   = 0
+	ROOM_PROPORTION   = 0.035
+	GLASS_PROPORTION  = 0.05
 	# Eliminate doors that only get rid of at most this many steps.
-	DOOR_THRESHOLD   = 50
-	ROOMS_MADE_OF    = Tile.EDGE
-	ROOM_SIZES       = (3, 5, 7, 9)
+	DOOR_THRESHOLD    = 50
+	ROOMS_MADE_OF     = Tile.EDGE
+	ROOM_SIZES        = (3, 5, 7, 9)
+	GLASS_WALL_LENGTH = 5
 	# Whether Tile.EDGE blocks can be trimmed.
-	CORNER_CUT_ROOMS = False
+	CORNER_CUT_ROOMS  = False
 	# Trim back super zig zaggy walls.
 	TRIM_OPERATIONS = [
 		(cut_patterns, Tile, Tile.BLANK, 1.0),
@@ -492,6 +493,21 @@ class World:
 					self.cells[xy] = factory(arg)
 				elif factory == Thing:
 					self.cells[xy].contents.append(factory(arg))
+#P#		print "Placing special elements."
+		# Place some glass walls.
+		for i in xrange(int(self.GLASS_PROPORTION * w * h)):
+			loc = self.random_wall()
+			stack = [loc]
+			already_hit = set()
+			while stack and len(already_hit) < self.GLASS_WALL_LENGTH:
+				xy = stack.pop()
+				# Only convert walls into glass.
+				if self.cells[xy].basic != Tile.WALL: continue
+				if xy in already_hit: continue
+				already_hit.add(xy)
+				self.cells[xy].basic = Tile.GLASS
+				for n in self.get_neighbors(xy):
+					stack.append(n)
 		# Compute a map of how many steps are required to walk to each point on the map.
 		# Compute twice, once with doors not counting, once with them counting.
 		# The doors not counting map will tell us the value of each door.
