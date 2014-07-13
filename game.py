@@ -307,7 +307,7 @@ class DemolitionWand(ItemType):
 
 	def activate(self, direction=None):
 		tile = w.cells[w.player.get_in_direction(direction)]
-		if tile.basic in (Tile.WALL, Tile.DOOR):
+		if tile.basic in (Tile.WALL, Tile.DOOR, Tile.GLASS):
 			tile.basic = Tile.BLANK
 			return True
 		return False
@@ -316,11 +316,13 @@ class Player:
 	def __init__(self):
 		self.xy = None
 		self.inventory = {}
+		# For debugging, give the play 50 of every item.
 		for item in item_class_list:
 			self.inventory[item()] = 50
 
-#	def usable_items(self):
-#		return [itemtype for
+	def lookup_item(self, name):
+		for itemtype, count in self.inventory.iteritems():
+			pass
 
 	def use_item(self, name):
 		for itemtype, count in self.inventory.iteritems():
@@ -746,7 +748,7 @@ class World:
 			tile = self.cells[x, y]
 			s = tile.to_string()
 			if (x, y) not in self.revealed:
-				return foggy + " " + foggy + " "
+				return foggy + ":" + foggy + ":"
 			# Mark the floors of magical realms.
 			if (x, y) not in self.steps_doors_dont_count:
 				if s == __ + __:
@@ -853,6 +855,11 @@ def main_loop(_stdscr):
 			item = get_input("Item to use: ").strip()
 			if not item: continue
 			w.player.use_item(item)
+		elif action == ord("i"):
+			# Info on item.
+			item = get_input("Info on item: ").strip()
+			if not item: continue
+			w.player.lookup_item(item)
 		elif action == ord("0"):
 			w.full_rerender()
 			for x in xrange(w.w):
