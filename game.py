@@ -217,6 +217,8 @@ class ScrollOfTeleportation(ItemType):
 			else:
 				# If no tiles are unrevealed, then simply choice randomly.
 				dest_x, dest_y = random.randrange(2, w.w-2), random.randrange(2, w.h-2)
+		# Draw an explosion effect, and send the camera there.
+		w.camera_track = dest_x, dest_y
 		for dx in (-1, 0, 1):
 			for dy in (-1, 0, 1):
 				if abs(dx) + abs(dy) > 1: continue
@@ -227,6 +229,8 @@ class ScrollOfTeleportation(ItemType):
 		g.refresh_screen()
 #		stdscr.refresh()
 		time.sleep(0.4)
+		# Next, show the player the destination area for a second,
+		# so he or she can see what is about to be blown away.
 		w.pprint()
 		g.refresh_screen()
 #		stdscr.refresh()
@@ -279,6 +283,10 @@ class ScryingOrb(ItemType):
 	def activate(self):
 		result = get_location_selection("Scry where?", lambda xy: True)
 		w.see_from(result)
+		# Rerender the results, in case the scry would otherwise be off-screen.
+		w.pprint()
+		g.refresh_screen()
+		show_message("Behold!")
 		return True
 
 @item
