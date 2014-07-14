@@ -1,6 +1,6 @@
 #! /usr/bin/python
 
-import math, random, time, Queue
+import math, random, time, sys, Queue
 import curses, curses.wrapper
 
 colors = [chr(i) for i in xrange(9)]
@@ -438,14 +438,34 @@ class World:
 	print_steps = False
 	print_paths = False
 
-	def build_world(self, w, h):
+	def __init__(self, coarse_w, coarse_h):
+		self.coarse_w, self.coarse_h = coarse_w, coarse_h
+		self.w, self.h = 2*self.coarse_w+1, 2*self.coarse_h+1
+		self.camera_track = (1, 1)
+		self.visible_count = {}
+
+	def build_world(self):
 		# XXX: DEBUG, GET RID OF LATER
 		self.steps_doors_dont_count, self.steps = {}, {}
-
+		self.visible_memo = {}
+		# Initialize the player.
+		self.player = Player()
+		counter = [0]
+		def update():
+			if "--show-world-gen" in sys.argv:
+				self.pprint(everything=True)
+				g.refresh_screen(fullscreen=True)
+		def rare_update(freq):
+			counter[0] += 1
+			if counter[0] % freq == 0:
+				update()
+		def clear_entire_screen():
+			for y in xrange(screen_height):
+				stdscr.addstr(y, 0, " "*(screen_width-1))
+			stdscr.refresh()
 		# Generate the initial maze via a random depth first search.
 #P#		print "Generating maze."
 		self.cells = {}
-		self.w, self.h = 2*w+1, 2*h+1
 		# Place the outermost border of Tile.EDGE tiles.
 		edge_locs = []
 		for x in xrange(self.w):
@@ -461,6 +481,7 @@ class World:
 				self.cells[x, y] = Tile(Tile.WALL)
 		#self.start_loc = self.random_center()
 		self.start_loc = (1, 1)
+		self.player.xy = self.start_loc
 		stack = [(None, self.start_loc)]
 		while stack:
 			prev, loc = stack.pop()
@@ -474,22 +495,27 @@ class World:
 			random.shuffle(neighbors)
 			for n in neighbors:
 				stack.append((loc, (n[0]*2-loc[0], n[1]*2-loc[1])))
+			rare_update(10)
+		update()
 		# At this point the maze is a tree.
 		# Add some random gaps.
 #P#		print "Placing cracks and rooms."
-		for i in xrange(int(self.GAP_PROPORTION * w * h)):
+		for i in xrange(int(self.GAP_PROPORTION * self.coarse_w * self.coarse_h)):
 			xy = self.random_wall()
 			# Make sure the wall isn't fully surrouneded, or we would (trivially) disconnect the graph!
 			# This is important!
 			if any(self.cells[n].basic == Tile.BLANK for n in self.get_neighbors(xy)):
 				self.cells[xy] = Tile(Tile.BLANK)
+			rare_update(10)
+		update()
 		# Add some rooms.
-		for i in xrange(int(self.ROOM_PROPORTION * w * h)):
+		for i in xrange(int(self.ROOM_PROPORTION * self.coarse_w * self.coarse_h)):
 			room_w, room_h = random.choice(self.ROOM_SIZES), random.choice(self.ROOM_SIZES)
 			xy = random.choice(range(1, self.w-room_w, 2)), random.choice(range(1, self.h-room_h, 2))
 			for x in xrange(room_w):
 				for y in xrange(room_h):
 					self.cells[xy[0]+x, xy[1]+y] = Tile(Tile.ROOM)
+			update()
 			# Find all the borders to the room.
 			borders = []
 			for x in xrange(-1, room_w+1):
@@ -510,6 +536,7 @@ class World:
 					if not self.is_connected():
 						# Disallowed, undo.
 						self.cells[border] = Tile(Tile.BLANK)
+						update()
 						continue
 					# Good, this one is allowed.
 					borders.remove(border)
@@ -521,7 +548,7 @@ class World:
 		# Add some random unlockable doors.
 #P#		print "Placing doors."
 		self.doors = []
-		for i in xrange(int(self.DOOR_PROPORTION * w * h)):
+		for i in xrange(int(self.DOOR_PROPORTION * self.coarse_w * self.coarse_h)):
 			xy = self.random_wall()
 			# Make sure the spot makes sense for a door.
 			neighbors = self.get_neighbors(xy)
@@ -531,6 +558,7 @@ class World:
 				# Store the coordinates of the two sides of the door, while it's easy.
 				door.sides = [n for n in neighbors if self.cells[n].basic != Tile.WALL]
 				self.doors.append(door)
+				update()
 		# Cut corners, to make minirooms.
 		# Also, place treasure chests in corners.
 #P#		print "Trimming walls, placing chests."
@@ -549,9 +577,10 @@ class World:
 					self.cells[xy] = factory(arg)
 				elif factory == Thing:
 					self.cells[xy].contents.append(factory(arg))
+				update()
 #P#		print "Placing special elements."
 		# Place some glass walls.
-		for i in xrange(int(self.GLASS_PROPORTION * w * h)):
+		for i in xrange(int(self.GLASS_PROPORTION * self.coarse_w * self.coarse_h)):
 			loc = self.random_wall()
 			stack = [loc]
 			already_hit = set()
@@ -564,6 +593,7 @@ class World:
 				self.cells[xy].basic = Tile.GLASS
 				for n in self.get_neighbors(xy):
 					stack.append(n)
+				update()
 		# Compute a map of how many steps are required to walk to each point on the map.
 		# Compute twice, once with doors not counting, once with them counting.
 		# The doors not counting map will tell us the value of each door.
@@ -610,13 +640,15 @@ class World:
 			# Delete the door if it's too useless.
 			if door.steps_skipped < self.DOOR_THRESHOLD:
 				door.basic = Tile.WALL
+			update()
 		# Add random goodies.
 		# Rule: Better goodies appear in high step count regions.
 		for obj, prob in [(Thing.GOLD, self.GOLD_PROPORTION)]:
-			for i in xrange(int(prob * w * h)):
+			for i in xrange(int(prob * self.coarse_w * self.coarse_h)):
 				xy = self.random_tile()
 				if self.cells[xy].basic == Tile.BLANK:
 					self.cells[xy].contents.append(Thing(obj))
+					update()
 		# Add enemies, based on a simple algorithm:
 		# Compute the number of tiles visible from each open tile. Place an enemy at the
 		# tile that can see the most. Now, disqualify every tile visible from that tile.
@@ -627,29 +659,30 @@ class World:
 		# low tile count spawns traps, while high tile count spawns boss enemies, because
 		# it's likely to be in the middle of a room.
 #P#		print "Finding visibility map."
-		visible_count = {}
-#		for x in xrange(self.w):
-#			for y in xrange(self.h):
-#				# Only consider passible squares.
-#				if self.cells[x, y].is_passable(doors_count=False):
-#					visible_count[x, y] = len(self.visible_set((x, y)))
+		for x in xrange(self.w):
+			for y in xrange(self.h):
+				# Only consider passible squares.
+				if self.cells[x, y].is_passable(doors_count=False):
+					self.visible_count[x, y] = len(self.visible_set((x, y)))
+				rare_update(30)
 		# Disqualify tiles adjacent to the origin.
 		def disqualify_from(spot):
 			for xy in self.visible_set(spot):
-				if xy in visible_count:
-					visible_count.pop(xy)
+				if xy in self.visible_count:
+					self.visible_count.pop(xy)
 		disqualify_from(self.start_loc)
 #P#		print "Populating monsters."
-		while visible_count:
+		while self.visible_count:
 			# Now, find the most visible tile.
-			spot = max(visible_count, key=visible_count.get)
-			visible_tiles = visible_count[spot]
+			spot = max(self.visible_count, key=self.visible_count.get)
+			visible_tiles = self.visible_count[spot]
 			# Only spawn the enemy with a probability that goes up with the number of visible tiles.
 			probability = 1.0 - (1.0 - self.ENEMY_PROBABILITY) * math.e**(-visible_tiles/float(self.ENEMY_TILE_CONSTANT))
 			if random.random() <= probability:
 				self.cells[spot].contents.append(Thing(Thing.ENEMY))
 			# Find the visibility set of the new enemy, and eliminate those tiles.
 			disqualify_from(spot)
+			update()
 		# Place extremely rare stuff, like nether cracks.
 #P#		print "Placing rare objects and world elements."
 		# Spawn a nether crack: A cell on the border that is a Tile.WALL tile.
@@ -675,9 +708,6 @@ class World:
 		self.assert_connected()
 		# Initialize the fog.
 		self.revealed = set()
-		# Initialize the player.
-		self.player = Player()
-		self.player.xy = self.start_loc
 		# Compute the shortest path, just for debugging sake.
 #P#		print "Computing pathing."
 		self.shortest_winning_path = self.shortest_path(self.player.xy, self.dest_loc)
@@ -685,6 +715,7 @@ class World:
 		# For efficiency rerendering, use a dirty list.
 		# Initally, everything is dirty, to require a full first rerender.
 		self.full_rerender()
+		clear_entire_screen()
 
 	def full_rerender(self):
 		self.dirty = set((x, y) for x in xrange(self.w) for y in xrange(self.h))
@@ -746,6 +777,8 @@ class World:
 		return True
 
 	def visible_set(self, origin):
+		if origin in self.visible_memo:
+			return self.visible_memo[origin]
 		stack = [origin]
 		reached = set()
 		while stack:
@@ -758,6 +791,7 @@ class World:
 				if n not in reached:
 					for nn in self.get_neighbors(n):
 						stack.append(nn)
+		self.visible_memo[origin] = reached
 		return reached
 
 	def see_from(self, origin):
@@ -797,7 +831,7 @@ class World:
 		self.print_character(2*xy[0], xy[1], pattern[:2])
 		self.print_character(2*xy[0]+1, xy[1], pattern[2:])
 
-	def pprint(self, fog=True):
+	def pprint(self, everything=False):
 		def composite(a, b):
 			# Compose two characters, with b overlayed on a.
 			a1, a2 = a[:2], a[2:]
@@ -808,8 +842,10 @@ class World:
 		def print_cell(x, y):
 			tile = self.cells[x, y]
 			s = tile.to_string()
-			if (x, y) not in self.revealed:
+			if (not everything) and (x, y) not in self.revealed:
 				return foggy + ":" + foggy + ":"
+			if (x, y) in self.visible_count:
+				return blue + "X" + blue + "X"
 			# Mark the floors of magical realms.
 			if (x, y) not in self.steps_doors_dont_count:
 				if s == __ + __:
@@ -829,7 +865,7 @@ class World:
 			if (x, y) == self.player.xy:
 				s = composite(s, player_color + "P" + __)
 			return s
-		for x, y in self.dirty:
+		for x, y in (self.cells if everything else self.cells):
 			s = print_cell(x, y)
 			self.print_character(2*x, y, s[:2])
 			self.print_character(2*x+1, y, s[2:])
@@ -894,9 +930,6 @@ def get_location_selection(prompt, validator):
 		curses.curs_set(0)
 		stdscr.addstr(screen_height-1, 0, " " * len(prompt))
 
-w = World()
-w.build_world(35, 25)
-
 class Game:
 	camera_mode_list = ["follow", "fixed"]
 
@@ -905,7 +938,7 @@ class Game:
 		self.camera_mode = self.camera_mode_list[0]
 		self.max_pane_line_reached = 0
 
-	def refresh_screen(self):
+	def refresh_screen(self, fullscreen=False):
 		stdscr.refresh()
 		# Center the view as much as possible.
 		if self.camera_mode == "follow":
@@ -916,7 +949,10 @@ class Game:
 		self.view_x, self.view_y = min(w.w-self.map_size[0]/2, self.view_x), min(w.h-self.map_size[1], self.view_y)
 		# Weirdly, curses defines refresh such that the last max row and max col to render two are included,
 		# so we have to subtract off one. Very strange choice.
-		world_pad.refresh(self.view_y, self.view_x*2, 0, 0, self.map_size[1]-1, self.map_size[0]-1)
+		if fullscreen:
+			world_pad.refresh(self.view_y, self.view_x*2, 0, 0, screen_height-1, screen_width-1)
+		else:
+			world_pad.refresh(self.view_y, self.view_x*2, 0, 0, self.map_size[1]-1, self.map_size[0]-1)
 
 	def redraw_info_pane(self):
 		width = self.info_pane_size[0]
@@ -956,7 +992,7 @@ class Game:
 				add_line("Chest: (l to loot)")
 				print_item_listing(thing.inventory)
 				if thing.gold_content != 0:
-					add_line(" %2i) gold" % thing.gold_content)
+					add_line(" +%-2i gold" % thing.gold_content)
 		self.max_pane_line_reached = line[0]
 		info_pane.refresh()
 
@@ -987,11 +1023,15 @@ class Game:
 		self.info_pane_size = screen_width - self.map_size[0], screen_height
 		self.textbox_size = self.map_size[0], 1
 
+		w = World(35, 25)
+
 		# Allocate a pad to store the rendered map.
 		# DEBUG: It seems to want an extra column, for some reason I can't figure out. :(
 		world_pad = curses.newpad(w.h, w.w*2+1)
 		# Allocate a window to draw the info pane.
 		info_pane = curses.newwin(self.info_pane_size[0], self.info_pane_size[1], 0, self.map_size[0])
+
+		w.build_world()
 
 		while True:
 			# Cast player vision.
@@ -1073,7 +1113,11 @@ class Game:
 					w.full_rerender()
 					w.print_steps ^= 1
 				elif cheat == "new":
-					w = World(35, 18)
+					w = World(35, 25)
+					w.build_world()
+				elif cheat == "items":
+					for item in item_type_list:
+						w.player.inventory[item] = 50
 
 try:
 	stdscr = curses.initscr()
