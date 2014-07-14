@@ -17,8 +17,38 @@ class Thing:
 	ENEMY = 1
 	def __init__(self, basic):
 		self.basic = basic
+		self.is_super = False
+
+	def populate_gold(self, value_rating):
+		# Rule: A chest will rarely contain an item that is worth more than the value_rating.
+		self.gold_content = 0
+		if random.randrange(0, w.SUPER_CHEST_ONE_IN) == 0:
+			# Occasionally a super chest will spawn.
+			value_rating *= 2
+			self.is_super = True
+		else:
+			# Otherwise, randomly discount the value rating, to mix up the chest qualities.
+			value_rating = random.randint(value_rating/3, value_rating)
+		starting = value_rating
+		self.inventory = {}
+		while value_rating > starting/2 and sum(self.inventory.values()) < w.MAX_CHEST_CONTENTS:
+			# Randomly, sometimes truncate the item list.
+			if random.random() <= 0.25:
+				break
+			available_items = [item for item in item_type_list if item.value <= value_rating]
+			if not available_items: break
+			new = random.choice(available_items)
+			if new not in self.inventory: self.inventory[new] = 0
+			self.inventory[new] += 1
+			value_rating -= new.value
+		# If no items, or randomly reimburse remaining value with a little gold.
+		if random.random() <= 0.4 or sum(self.inventory.values()) == 0:
+			self.gold_content += value_rating
 
 	def to_string(self):
+		# Special case for super chests:
+		if self.is_super:
+			return __ + yellow + "G" 
 		return self.THING_STRINGS[self.basic]
 
 class Tile:
@@ -67,9 +97,10 @@ class Tile:
 	def is_transparent(self):
 		return self.basic in [self.BLANK, self.ROOM, self.GLASS, self.START, self.DESTINATION]
 
-item_class_list = []
+item_type_list = []
 def item(cls):
-	item_class_list.append(cls)
+	cls.sort_index = len(item_type_list)
+	item_type_list.append(cls())
 	return cls
 
 class ItemType:
@@ -95,7 +126,7 @@ class ItemType:
 class ItemKey(ItemType):
 	name = "key"
 	long_name = "Key"
-	description = "A small key, plain key."
+	description = "A small plain key."
 	usable = True
 	directional = True
 	value = 5
@@ -140,7 +171,6 @@ class ScrollOfSeeing(ItemType):
 				if not w.cells[xy].is_transparent(): continue
 				w.print_pattern(xy, blue+"\xff"+blue+"\xff")
 			g.refresh_screen()
-#			stdscr.refresh()
 			time.sleep(0.4)
 		w.revealed |= locations
 		w.dirty |= locations
@@ -178,7 +208,6 @@ class ScrollOfRevelation(ItemType):
 						w.dirty.add(xy)
 						already_hit.add(xy)
 			g.refresh_screen()
-#			stdscr.refresh()
 			time.sleep(0.1)
 		return True
 
@@ -227,13 +256,11 @@ class ScrollOfTeleportation(ItemType):
 				w.revealed.add(xy)
 				w.dirty.add(xy)
 		g.refresh_screen()
-#		stdscr.refresh()
 		time.sleep(0.4)
 		# Next, show the player the destination area for a second,
 		# so he or she can see what is about to be blown away.
 		w.pprint()
 		g.refresh_screen()
-#		stdscr.refresh()
 		time.sleep(1.0)
 		for dx in (-1, 0, 1):
 			for dy in (-1, 0, 1):
@@ -278,7 +305,7 @@ class ScryingOrb(ItemType):
 	name = "scry"
 	long_name = "Scrying Orb"
 	description = "A pale blue orb, filled with mists."
-	value = 80
+	value = 35
 
 	def activate(self):
 		result = get_location_selection("Scry where?", lambda xy: True)
@@ -327,26 +354,37 @@ class DemolitionWand(ItemType):
 class Player:
 	def __init__(self):
 		self.xy = None
+		self.gold = 0
 		self.inventory = {}
+		self.level = 1
+		self.xp = 0
+		self.hp = self.hp_max = 8
+		self.mp = self.mp_max = 20
 		# For debugging, give the play 50 of every item.
-		for item in item_class_list:
-			self.inventory[item()] = 50
+#		for item in item_type_list:
+#			self.inventory[item] = 50
 
 	def lookup_item(self, name):
 		for itemtype, count in self.inventory.iteritems():
-			pass
+			if itemtype.name == name and count > 0:
+				return itemtype
+
+	def gain_item(self, itemtype, count):
+		if itemtype not in self.inventory:
+			self.inventory[itemtype] = 0
+		self.inventory[itemtype] += count
 
 	def use_item(self, name):
-		for itemtype, count in self.inventory.iteritems():
-			if itemtype.name == name and count > 0:
-				break
-		else:
-			# Item not found, or you don't have enough.
+		itemtype = self.lookup_item(name)
+		if itemtype is None:
 			show_message("No matching item: %r" % name)
-			return False
+			return
 		success = itemtype.use()
 		if success:
 			self.inventory[itemtype] -= 1
+			# Prune entries that reach zero.
+			if not self.inventory[itemtype]:
+				self.inventory.pop(itemtype)
 		else:
 			show_message("No effect.")
 
@@ -376,7 +414,7 @@ class World:
 	ROOMS_MADE_OF     = Tile.EDGE
 	ROOM_SIZES        = (3, 5, 7, 9)
 	GLASS_WALL_LENGTH = 5
-	# Whether Tile.EDGE blocks can be trimmed.
+	# Whether Tile.EDGE blocks can be trimmed in the trimming phase.
 	CORNER_CUT_ROOMS  = False
 	# Trim back super zig zaggy walls.
 	TRIM_OPERATIONS = [
@@ -389,14 +427,18 @@ class World:
 	NETHER_CRACK_PROBABILITY = 0.5
 	# For an enemy candidate location that can see x tiles the probability of spawning is:
 	#   1 - (1 - ENEMY_PROBABILITY) * e**(-x/ENEMY_TILE_CONSTANT)
-	ENEMY_PROBABILITY = 0.25
+	ENEMY_PROBABILITY   = 0.25
 	ENEMY_TILE_CONSTANT = 40
+	# One in this many chests spawned are worth double value.
+	SUPER_CHEST_ONE_IN  = 10
+	# A chest won't have more than this many items in it.
+	MAX_CHEST_CONTENTS  = 3
 
 	# Debugging rendering features.
 	print_steps = False
 	print_paths = False
 
-	def __init__(self, w, h):
+	def build_world(self, w, h):
 		# XXX: DEBUG, GET RID OF LATER
 		self.steps_doors_dont_count, self.steps = {}, {}
 
@@ -622,6 +664,13 @@ class World:
 		# Place the nether crack.
 		if magical_edges and random.random() <= self.NETHER_CRACK_PROBABILITY:
 			self.cells[random.choice(magical_edges)] = Tile(Tile.WALL)
+		# Populate the treasure chests with items.
+		for xy, tile in self.cells.iteritems():
+			for thing in tile.contents:
+				if thing.basic == Thing.GOLD:
+					# Compute the treasure chest value.
+					value_rating = self.steps_doors_dont_count.get(xy, 100)/4
+					thing.populate_gold(value_rating)
 		# Finally, one last connectedness assertion.
 		self.assert_connected()
 		# Initialize the fog.
@@ -662,7 +711,7 @@ class World:
 		if not self.is_connected():
 			# Mark every reached cell.
 			for xy in self.reached:
-				self.cells[xy].basic = Tile.GOLD
+				self.cells[xy].basic = Tile.START
 			self.pprint()
 			print red+"NOT CONNECTED"
 			exit()
@@ -845,14 +894,16 @@ def get_location_selection(prompt, validator):
 		curses.curs_set(0)
 		stdscr.addstr(screen_height-1, 0, " " * len(prompt))
 
-w = World(35, 25)
+w = World()
+w.build_world(35, 25)
 
 class Game:
 	camera_mode_list = ["follow", "fixed"]
 
 	def __init__(self):
 		self.view_x = self.view_y = 0
-		self.camera_mode = "follow"
+		self.camera_mode = self.camera_mode_list[0]
+		self.max_pane_line_reached = 0
 
 	def refresh_screen(self):
 		stdscr.refresh()
@@ -867,8 +918,50 @@ class Game:
 		# so we have to subtract off one. Very strange choice.
 		world_pad.refresh(self.view_y, self.view_x*2, 0, 0, self.map_size[1]-1, self.map_size[0]-1)
 
+	def redraw_info_pane(self):
+		width = self.info_pane_size[0]
+		def full(s):
+			return s + " " * (width - len(s))
+		# Clear out the old status pane.
+		for l in xrange(self.max_pane_line_reached+1):
+			info_pane.addstr(l, 0, full(""))
+		# Draw the status line at the top.
+		info_pane.addstr(0, 0, full("HP %i/%i, MP %i/%i" % (w.player.hp, w.player.hp_max, w.player.mp, w.player.mp_max)))
+		def draw_bar(y, proportion, color):
+			# Add the caps.
+			info_pane.addstr(y, 0, "[")
+			info_pane.addstr(y, width-1, "]")
+			# Add the middle.
+			s = "=" * int((width-2) * proportion)
+			s += " " * (width - 2 - len(s))
+			info_pane.addstr(y, 1, s, curses.color_pair(color_mapping[color]))
+		# Draw the HP and MP bars.
+		draw_bar(1, w.player.hp/float(w.player.hp_max), red)
+		draw_bar(2, w.player.mp/float(w.player.mp_max), blue)
+		line = [2]
+		def add_line(s):
+			line[0] += 1
+			info_pane.addstr(line[0], 0, full(s))
+		def print_item_listing(inventory):
+			inv = sorted(inventory.items(), key=lambda x: x[0].sort_index)
+			for itemtype, count in inv:
+				add_line(" %2i) %s " % (count, itemtype.name))
+		# Draw the inventory.
+		add_line("Inventory: (%i gold)" % w.player.gold)
+		print_item_listing(w.player.inventory)
+		# Check if the player is over a treasure chest.
+		tile = w.cells[w.player.xy]
+		for thing in tile.contents:
+			if thing.basic == Thing.GOLD:
+				add_line("Chest: (l to loot)")
+				print_item_listing(thing.inventory)
+				if thing.gold_content != 0:
+					add_line(" %2i) gold" % thing.gold_content)
+		self.max_pane_line_reached = line[0]
+		info_pane.refresh()
+
 	def main_loop(self, _stdscr):
-		global stdscr, world_pad, w, screen_height, screen_width
+		global stdscr, world_pad, info_pane, w, screen_height, screen_width
 		stdscr = _stdscr
 		screen_height, screen_width = stdscr.getmaxyx()
 
@@ -891,13 +984,14 @@ class Game:
 		# It only makes sense to have the map width be even, to avoid showing a fractional tile.
 		if self.map_size[0] % 2 == 1:
 			self.map_size = self.map_size[0]-1, self.map_size[1]
-		self.info_size = screen_width - self.map_size[0], screen_height
+		self.info_pane_size = screen_width - self.map_size[0], screen_height
 		self.textbox_size = self.map_size[0], 1
 
 		# Allocate a pad to store the rendered map.
-		# XXX: For some reason, one extra column is required.
-		# I can't quite figure out why.
+		# DEBUG: It seems to want an extra column, for some reason I can't figure out. :(
 		world_pad = curses.newpad(w.h, w.w*2+1)
+		# Allocate a window to draw the info pane.
+		info_pane = curses.newwin(self.info_pane_size[0], self.info_pane_size[1], 0, self.map_size[0])
 
 		while True:
 			# Cast player vision.
@@ -907,6 +1001,7 @@ class Game:
 			# Make the camera track the player for now.
 			w.camera_track = w.player.xy
 			self.refresh_screen()
+			self.redraw_info_pane()
 			# Get user input.
 			action = stdscr.getch(0, 0)
 			# Attempt to process as motion.
@@ -922,9 +1017,13 @@ class Game:
 				w.player.use_item(item)
 			elif action == ord("i"):
 				# Info on item.
-				item = get_input("Info on item: ").strip()
-				if not item: continue
-				w.player.lookup_item(item)
+				item_name = get_input("Info on item: ").strip()
+				if not item_name: continue
+				item = w.player.lookup_item(item_name)
+				if item is None:
+					show_message("No matching item.")
+					continue
+				show_message(item.long_name + ": " + item.description)
 			elif action == ord("c"):
 				# Free camera control mode.
 				prompt = "Free camera control. (esc/enter to cancel)"
@@ -946,6 +1045,16 @@ class Game:
 				cml = self.camera_mode_list
 				self.camera_mode = cml[(cml.index(self.camera_mode)+1)%len(cml)]
 				show_message("New camera mode: %s" % self.camera_mode)
+			elif action == ord("l"):
+				# Loot, or otherwise interact with something you're standing on.
+				# Try to loot any treasure chests we may be standing on.
+				tile = w.cells[w.player.xy]
+				for thing in tile.contents:
+					if thing.basic == Thing.GOLD:
+						for itemtype, count in thing.inventory.iteritems():
+							w.player.gain_item(itemtype, count=count)
+						w.player.gold += thing.gold_content
+				tile.contents = [thing for thing in tile.contents if thing.basic != Thing.GOLD]
 			elif action == ord("`"):
 				# Run a cheat
 				cheat = get_input("Cheat: ").strip()
