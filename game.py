@@ -121,7 +121,7 @@ class ItemMagicalKey(ItemKey):
 
 @item
 class ScrollOfSeeing(ItemType):
-	name = "s-seeing"
+	name = "seeing"
 	long_name = "Scroll of Seeing"
 	description = "A blue scroll that allows you to see around corners."
 	value = 10
@@ -139,7 +139,8 @@ class ScrollOfSeeing(ItemType):
 			for xy in locations:
 				if not w.cells[xy].is_transparent(): continue
 				w.print_pattern(xy, blue+"\xff"+blue+"\xff")
-			stdscr.refresh()
+			g.refresh_screen()
+#			stdscr.refresh()
 			time.sleep(0.4)
 		w.revealed |= locations
 		w.dirty |= locations
@@ -147,7 +148,7 @@ class ScrollOfSeeing(ItemType):
 
 @item
 class GreaterScrollOfSeeing(ScrollOfSeeing):
-	name = "gs-seeing"
+	name = "g-seeing"
 	long_name = "Greater Scroll of Seeing"
 	description = "A large blue scroll that allows you to see far around corners."
 	greater = True 
@@ -155,7 +156,7 @@ class GreaterScrollOfSeeing(ScrollOfSeeing):
 
 @item
 class ScrollOfRevelation(ItemType):
-	name = "s-reveal"
+	name = "reveal"
 	long_name = "Scroll of Revelation"
 	description = "A green scroll that allows you to see through walls."
 	value = 30
@@ -176,13 +177,14 @@ class ScrollOfRevelation(ItemType):
 						w.revealed.add(xy)
 						w.dirty.add(xy)
 						already_hit.add(xy)
-			stdscr.refresh()
+			g.refresh_screen()
+#			stdscr.refresh()
 			time.sleep(0.1)
 		return True
 
 @item
 class GreaterScrollOfRevelation(ScrollOfRevelation):
-	name = "gs-reveal"
+	name = "g-reveal"
 	long_name = "Greater Scroll of Revelation"
 	description = "A large green scroll that allows you to see far through walls."
 	greater = True
@@ -190,7 +192,7 @@ class GreaterScrollOfRevelation(ScrollOfRevelation):
 
 @item
 class ScrollOfTeleportation(ItemType):
-	name = "s-teleport"
+	name = "teleport"
 	long_name = "Scroll of Teleportation"
 	description = "A small yellow scroll that transports the user to undiscovered territory. Be careful what you land on!"
 	value = 85
@@ -222,10 +224,12 @@ class ScrollOfTeleportation(ItemType):
 				w.print_pattern(xy, yellow+"\xff"+yellow+"\xff")
 				w.revealed.add(xy)
 				w.dirty.add(xy)
-		stdscr.refresh()
+		g.refresh_screen()
+#		stdscr.refresh()
 		time.sleep(0.4)
 		w.pprint()
-		stdscr.refresh()
+		g.refresh_screen()
+#		stdscr.refresh()
 		time.sleep(1.0)
 		for dx in (-1, 0, 1):
 			for dy in (-1, 0, 1):
@@ -237,7 +241,7 @@ class ScrollOfTeleportation(ItemType):
 
 @item
 class GreaterScrollOfTeleportation(ScrollOfTeleportation):
-	name = "gs-teleport"
+	name = "g-teleport"
 	long_name = "Greater Scroll of Teleportation"
 	description = "A yellow scroll that transports the user. Be careful what you land on!"
 	value = 450
@@ -256,7 +260,7 @@ class AnkhOfRetreat(ItemType):
 			if not result: # Handle action cancelation.
 				return False
 			# Simultaneously disallow teleporting into magical areas and walls.
-			# Equivalently: You can only teleport where you could walk.
+			# Equivalently: You can only teleport where you could walk without doors.
 			if result not in w.steps_doors_dont_count:
 				show_message("Cannot retreat to a magical area or into walls.")
 				continue
@@ -727,10 +731,10 @@ class World:
 			s = curses.ACS_CKBOARD
 		if isinstance(s, str): s = ord(s)
 		if special:
-			stdscr.attron(special)
-		stdscr.addch(y, x, s, attr)
+			world_pad.attron(special)
+		world_pad.addch(y, x, s, attr)
 		if special:
-			stdscr.attroff(special)
+			world_pad.attroff(special)
 
 	def print_pattern(self, xy, pattern):
 		self.print_character(2*xy[0], xy[1], pattern[:2])
@@ -775,8 +779,6 @@ class World:
 		self.dirty = set()
 #		stdscr.addstr(y, 0, " ".join(get(x, y) for x in xrange(self.w)))
 
-w = World(35, 18)
-
 def show_message(msg):
 	stdscr.addstr(screen_height-1, 0, msg)
 	stdscr.getch(0, 0)
@@ -818,7 +820,10 @@ def get_location_selection(prompt, validator):
 			# try it in the middle of the screen.
 			xy = w.w/2, w.h/2
 		while True:
-			key = stdscr.getch(xy[1], 2*xy[0])
+			w.camera_track = xy
+			world_pad.move(xy[1], 2*xy[0])
+			g.refresh_screen()
+			key = world_pad.getch(xy[1], 2*xy[0])
 			if key in direction_mapping:
 				delta = direction_mapping[key]
 				new_xy = xy[0]+delta[0], xy[1]+delta[1]
@@ -832,52 +837,112 @@ def get_location_selection(prompt, validator):
 		curses.curs_set(0)
 		stdscr.addstr(screen_height-1, 0, " " * len(prompt))
 
-def main_loop(_stdscr):
-	global stdscr, w, screen_height, screen_width
-	stdscr = _stdscr
-	screen_height, screen_width = stdscr.getmaxyx()
+w = World(35, 22)
 
-	while True:
-		# Cast player vision.
-		w.see_from(w.player.xy)
-		# Update the world view.
-		w.pprint()
-		# Get user input.
-		action = stdscr.getch(0, 0)
-		# Attempt to process as motion.
-		if action in direction_mapping:
-			delta = direction_mapping[action]
-			new_xy = w.player.xy[0]+delta[0], w.player.xy[1]+delta[1]
-			if w.cells[new_xy].is_passable(doors_count=False):
-				w.player.xy = new_xy
-		elif action == ord("u"):
-			# Use item.
-			item = get_input("Item to use: ").strip()
-			if not item: continue
-			w.player.use_item(item)
-		elif action == ord("i"):
-			# Info on item.
-			item = get_input("Info on item: ").strip()
-			if not item: continue
-			w.player.lookup_item(item)
-		elif action == ord("0"):
-			w.full_rerender()
-			for x in xrange(w.w):
-				for y in xrange(w.h):
-					w.revealed.add((x, y))
-		elif action == ord("9"):
-			w.full_rerender()
-			w.revealed = set()
-		elif action == ord("1"):
-			w.full_rerender()
-			w.print_paths ^= 1
-		elif action == ord("2"):
-			w.full_rerender()
-			w.print_steps ^= 1
-		elif action == ord("3"):
-			w = World(35, 18)
+class Game:
+	camera_mode_list = ["follow", "fixed"]
 
-#curses.wrapper(main_loop)
+	def __init__(self):
+		self.view_x = self.view_y = 0
+		self.camera_mode = "follow"
+
+	def refresh_screen(self):
+		stdscr.refresh()
+		# Center the view as much as possible.
+		if self.camera_mode == "follow":
+			best_x, best_y = w.camera_track[0] - self.map_size[0]/4, w.camera_track[1]-self.map_size[1]/2
+			self.view_x, self.view_y = best_x, best_y
+		# Do bounds checking.
+		self.view_x, self.view_y = max(0, self.view_x), max(0, self.view_y)
+		self.view_x, self.view_y = min(w.w-self.map_size[0]/2-1, self.view_x), min(w.h-self.map_size[1]-1, self.view_y)
+		world_pad.refresh(self.view_y, self.view_x*2, 0, 0, self.map_size[1], self.map_size[0])
+
+	def main_loop(self, _stdscr):
+		global stdscr, world_pad, w, screen_height, screen_width
+		stdscr = _stdscr
+		screen_height, screen_width = stdscr.getmaxyx()
+
+		# Do some screen layout work.
+		# Layout:
+		# /-----\/-\
+		# |  a  ||b|
+		# \-----/| |
+		# (  c  )\-/
+		# Setup
+		# The bottom row is reserved for text entry. (c)
+		# All but the last 1/4th of the columns are reserved for displaying the map. (a)
+		# The last 1/4th (all the way down to the bottom row) is reserved for other UI elements. (b)
+		# Section (b) is subdivided into a top half, and a bottom five rows:
+		#   The top half displays a page of static information.
+		#   The bottom five lines are for the history of events.
+
+		# Size: width and height
+		self.map_size = screen_width*3/4, screen_height-2
+		# It only makes sense to have the map width be even, to avoid showing a fractional tile.
+		if self.map_size[0] % 2 == 1:
+			self.map_size = self.map_size[0]-1, self.map_size[1]
+		self.info_size = screen_width - self.map_size[0], screen_height
+		self.textbox_size = self.map_size[0], 1
+
+		# Allocate a pad to store the rendered map.
+		# XXX: For some reason, one extra column is required.
+		# I can't quite figure out why.
+		world_pad = curses.newpad(w.h, w.w*2+1)
+
+		while True:
+			# Cast player vision.
+			w.see_from(w.player.xy)
+			# Update the world view.
+			w.pprint()
+			# Make the camera track the player for now.
+			if self.camera_mode == "follow":
+				w.camera_track = w.player.xy
+			self.refresh_screen()
+			# Get user input.
+			action = stdscr.getch(0, 0)
+			# Attempt to process as motion.
+			if action in direction_mapping:
+				delta = direction_mapping[action]
+				new_xy = w.player.xy[0]+delta[0], w.player.xy[1]+delta[1]
+				if w.cells[new_xy].is_passable(doors_count=False):
+					w.player.xy = new_xy
+			elif action == ord("u"):
+				# Use item.
+				item = get_input("Item to use: ").strip()
+				if not item: continue
+				w.player.use_item(item)
+			elif action == ord("i"):
+				# Info on item.
+				item = get_input("Info on item: ").strip()
+				if not item: continue
+				w.player.lookup_item(item)
+			elif action == ord("c"):
+				# Camera run.
+				pass
+			elif action == ord("x"):
+				# Cycle to the next camera mode.
+				cml = self.camera_mode_list
+				self.camera_mode = cml[(cml.index(self.camera_mode)+1)%len(cml)]
+				show_message("New camera mode: %s" % self.camera_mode)
+			elif action == ord("`"):
+				# Run a cheat
+				cheat = get_input("Cheat: ").strip()
+				if cheat == "show":
+					w.full_rerender()
+					for x in xrange(w.w):
+						for y in xrange(w.h):
+							w.revealed.add((x, y))
+				elif cheat == "hide":
+					w.full_rerender()
+					w.revealed = set()
+				elif cheat == "path":		
+					w.full_rerender()
+					w.print_paths ^= 1
+				elif cheat == "steps":
+					w.full_rerender()
+					w.print_steps ^= 1
+				elif cheat == "new":
+					w = World(35, 18)
 
 try:
 	stdscr = curses.initscr()
@@ -900,7 +965,8 @@ try:
 	curses.cbreak()
 	curses.curs_set(0)
 	stdscr.keypad(1)
-	main_loop(stdscr)
+	g = Game()
+	g.main_loop(stdscr)
 finally:
 	curses.nocbreak(); stdscr.keypad(0); curses.echo()
 	curses.endwin()
