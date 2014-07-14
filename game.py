@@ -895,8 +895,7 @@ class Game:
 			# Update the world view.
 			w.pprint()
 			# Make the camera track the player for now.
-			if self.camera_mode == "follow":
-				w.camera_track = w.player.xy
+			w.camera_track = w.player.xy
 			self.refresh_screen()
 			# Get user input.
 			action = stdscr.getch(0, 0)
@@ -917,8 +916,21 @@ class Game:
 				if not item: continue
 				w.player.lookup_item(item)
 			elif action == ord("c"):
-				# Camera run.
-				pass
+				# Free camera control mode.
+				prompt = "Free camera control. (esc/enter to cancel)"
+				stdscr.addstr(screen_height-1, 0, prompt)
+				old_camera_mode = self.camera_mode
+				self.camera_mode = "fixed"
+				while True:
+					self.refresh_screen()
+					key = stdscr.getch(0, 0)
+					if key in direction_mapping:
+						delta = direction_mapping[key]
+						self.view_x, self.view_y = self.view_x + delta[0], self.view_y + delta[1]
+					elif key in (10, 13, 27):
+						break
+				self.camera_mode = old_camera_mode
+				stdscr.addstr(screen_height-1, 0, " " * len(prompt))
 			elif action == ord("x"):
 				# Cycle to the next camera mode.
 				cml = self.camera_mode_list
