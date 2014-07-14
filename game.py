@@ -837,7 +837,7 @@ def get_location_selection(prompt, validator):
 		curses.curs_set(0)
 		stdscr.addstr(screen_height-1, 0, " " * len(prompt))
 
-w = World(35, 22)
+w = World(35, 25)
 
 class Game:
 	camera_mode_list = ["follow", "fixed"]
@@ -854,8 +854,10 @@ class Game:
 			self.view_x, self.view_y = best_x, best_y
 		# Do bounds checking.
 		self.view_x, self.view_y = max(0, self.view_x), max(0, self.view_y)
-		self.view_x, self.view_y = min(w.w-self.map_size[0]/2-1, self.view_x), min(w.h-self.map_size[1]-1, self.view_y)
-		world_pad.refresh(self.view_y, self.view_x*2, 0, 0, self.map_size[1], self.map_size[0])
+		self.view_x, self.view_y = min(w.w-self.map_size[0]/2, self.view_x), min(w.h-self.map_size[1], self.view_y)
+		# Weirdly, curses defines refresh such that the last max row and max col to render two are included,
+		# so we have to subtract off one. Very strange choice.
+		world_pad.refresh(self.view_y, self.view_x*2, 0, 0, self.map_size[1]-1, self.map_size[0]-1)
 
 	def main_loop(self, _stdscr):
 		global stdscr, world_pad, w, screen_height, screen_width
@@ -877,7 +879,7 @@ class Game:
 		#   The bottom five lines are for the history of events.
 
 		# Size: width and height
-		self.map_size = screen_width*3/4, screen_height-2
+		self.map_size = screen_width*3/4, screen_height-1
 		# It only makes sense to have the map width be even, to avoid showing a fractional tile.
 		if self.map_size[0] % 2 == 1:
 			self.map_size = self.map_size[0]-1, self.map_size[1]
