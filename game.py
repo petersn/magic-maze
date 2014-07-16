@@ -1270,6 +1270,12 @@ class Game:
 
 		w.build_world()
 
+		equip_slots = {}
+		for i in xrange(10):
+			equip_slots[str(i)] = ""
+
+		digit_ords = map(ord, map(str, xrange(10)))
+
 		while True:
 			# Cast player vision.
 			w.see_from(w.player.xy)
@@ -1296,6 +1302,20 @@ class Game:
 				item = get_input("Item to use: ").strip()
 				if not item: continue
 				w.player.use_item(item)
+			elif action == ord("e"):
+				# Equip an item.
+				slot = get_input("Number to equip to: ").strip()
+				if slot not in map(str, xrange(10)):
+					show_message("Must map to digit, 0-9.")
+				else:
+					item = get_input("Item to bind: (empty to clear, ? to read) ")
+					if item == "?":
+						show_message("Slot %s has action: %r" % (slot, equip_slots[slot]))
+					else:
+						equip_slots[slot] = item
+			elif action in digit_ords:
+				if equip_slots[chr(action)]:
+					w.player.use_item(equip_slots[chr(action)])
 			elif action == ord("i"):
 				# Info on item.
 				item_name = get_input("Info on item: ").strip()
