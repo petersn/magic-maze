@@ -24,7 +24,7 @@ class Thing:
 		self.gold_content = 0
 		if random.randrange(0, w.SUPER_CHEST_ONE_IN) == 0:
 			# Occasionally a super chest will spawn.
-			value_rating *= 2
+			value_rating *= w.SUPER_CHEST_MULTIPLIER
 			self.is_super = True
 		else:
 			# Otherwise, randomly discount the value rating, to mix up the chest qualities.
@@ -41,7 +41,7 @@ class Thing:
 			if new not in self.inventory: self.inventory[new] = 0
 			self.inventory[new] += 1
 			value_rating -= new.value
-		# If no items, or randomly reimburse remaining value with a little gold.
+		# If no items (or randomly) reimburse remaining value with a little gold.
 		if random.random() <= 0.4 or sum(self.inventory.values()) == 0:
 			self.gold_content += value_rating
 
@@ -50,6 +50,122 @@ class Thing:
 		if self.is_super:
 			return __ + yellow + "G" 
 		return self.THING_STRINGS[self.basic]
+
+class Combatant:
+	# Armor works as straight damage reduction, with a minimum of 1 damage per hit.
+	armor = 0
+	max_hp = max_mp = 0
+
+	def __init__(self):
+		self.hp = self.max_hp
+		self.mp = self.max_mp
+
+	def animate_simple_attack(self, a, b, graphic=red + "\xff" + red + "\xff"):
+		# A convenience call for animating attacks.
+		w.pprint()
+		g.refresh_screen()
+		time.sleep(0.2)
+		w.print_pattern(a.xy, graphic)
+		w.print_pattern(b.xy, graphic)
+		g.refresh_screen()
+		time.sleep(0.2)
+		w.pprint()
+		time.sleep(0.2)
+
+	def take_hit(self, attack):
+		damage = attack["damage"]
+		# Do damage adjustment.
+		if damage > 0:
+			damage = max(1, damage - self.armor)
+		self.hp = max(0, self.hp - damage)
+
+	def do_melee_attack(self, target, melee_attack):
+		# Override this in a subclass of EnemyType to produce different effects, e.g., a poison debuff.
+		self.animate_simple_attack(self, target)
+		target.take_hit(melee_attack)
+
+	def should_die(self):
+		return self.hp <= 0
+
+enemy_type_list = []
+def enemy(cls):
+	enemy_type_list.append(cls)
+	return cls
+
+def generate_enemy(xy, tiles=1, steps=1):
+	return Zombie(xy)
+
+class EnemyType(Combatant):
+	display_string = red + "E" + red +"R"
+	# The speed at which this enemy walks towards the player. TODO: make work
+	walking_speed = 1
+	# The distance this enemy will try to get from the player. TODO: make work
+	desired_distance = 0
+	# This is the probability that any given move will instead be a random walk step.
+	random_walk_probability = 0.3
+	has_melee_attack = False
+	# If this flag is set then the enemy won't move in a round it starts by the player in.
+	# This is mostly useful for enemies that can't move then attack in one round.
+	stop_if_by_player = True
+	can_move_then_attack = False
+	# Set the difficulty to something huge, just for the lulz.
+	# If the player cheats the difficulty this high, he or she will see
+	# some weird error enemies, which will be fun.
+	difficulty = 1000000
+
+	def __init__(self, xy):
+		Combatant.__init__(self)
+		self.xy = xy
+		self.aggro = False
+
+	def do_ai(self):
+		start_pos = self.xy
+		# Check to see if we can see the player.
+		if w.player.xy in w.visible_set(self.xy):
+			self.aggro = True
+		if not self.aggro: return
+		neighbors = w.get_neighbors(self.xy) + [self.xy]
+		# If the player is by us, and we're supposed to stop if next to them, do so.
+		if self.stop_if_by_player and any(w.player.xy == n for n in neighbors):
+			pass
+		# If we are aggroed, then plan the shortest path towards them, and start walking.
+		elif random.random() <= self.random_walk_probability:
+			neighbors = [n for n in neighbors if w.cells[n].is_passable(doors_count=False)]
+			self.try_to_move_to(random.choice(neighbors))
+		else:
+			# Find the next step to take to get to the player.
+			# We might fail to be in the pathing map if there is no path to the player.
+			# In this case, just sit tight and wait for the player to stumble upon us.
+			if self.xy in w.player_source_pathing_map:
+				next_step = w.player_source_pathing_map[self.xy]
+				# The next step might be None if we're on top of the player: the or takes this into account.
+				self.try_to_move_to(next_step or self.xy)
+		# Compute this value to determine if we're also allowed to attack this round. (If relevant.)
+		self.moved_this_round = start_pos != self.xy
+
+	def do_combat(self):
+		if not self.aggro: return
+		# Check if the player is adjacent, and if we're allowed to attack and move in the same turn.
+		if self.has_melee_attack and (self.can_move_then_attack or not self.moved_this_round) and w.player.xy in w.get_neighbors(self.xy):
+			self.do_melee_attack(w.player, self.melee_attack)
+
+	def try_to_move_to(self, xy):
+		if w.check_if_unoccupied_by_people(xy):
+			self.xy = xy
+
+	def to_string(self):
+		return self.display_string
+
+@enemy
+class Zombie(EnemyType):
+	display_string = teal + "z" + __
+	# Make zombies stumble around a lot.
+	random_walk_probability = 0.5
+	max_hp = 2
+	xp_granted = 3
+	difficulty = 10
+	has_melee_attack = True
+	melee_attack = {"damage": 1}
 
 class Tile:
 	TILE_STRINGS = [
@@ -108,6 +224,8 @@ class ItemType:
 	description = "A non-descript item."
 	usable = False
 	directional = False
+	consumable = True
+	round_action = False
 	magical = False
 	greater = False
 	value = 0
@@ -351,15 +469,48 @@ class DemolitionWand(ItemType):
 			return True
 		return False
 
-class Player:
+# Weapons
+
+class MeleeWeapon(ItemType):
+	consumable = False
+	directional = True
+	round_action = True
+
+	def activate(self, direction=None):
+		flag = False
+		for m in w.monsters:
+			# Check if our attack hits.
+			if m.xy == w.player.get_in_direction(direction):
+				w.player.do_melee_attack(m, self.melee_attack)
+				flag = True
+		return flag
+
+@item
+class Knife(MeleeWeapon):
+	name = "knife"
+	long_name = "Knife"
+	description = "A meager melee weapon."
+	value = 15
+	melee_attack = {"damage": 1}
+
+@item
+class Sword(MeleeWeapon):
+	name = "sword"
+	long_name = "Sword"
+	description = "A simple melee weapon."
+	value = 45
+	melee_attack = {"damage": 2}
+
+class Player(Combatant):
 	def __init__(self):
 		self.xy = None
 		self.gold = 0
 		self.inventory = {}
 		self.level = 1
 		self.xp = 0
-		self.hp = self.hp_max = 8
-		self.mp = self.mp_max = 20
+		self.max_hp = 8
+		self.max_mp = 20
+		Combatant.__init__(self)
 		# For debugging, give the play 50 of every item.
 #		for item in item_type_list:
 #			self.inventory[item] = 50
@@ -381,10 +532,15 @@ class Player:
 			return
 		success = itemtype.use()
 		if success:
-			self.inventory[itemtype] -= 1
-			# Prune entries that reach zero.
-			if not self.inventory[itemtype]:
-				self.inventory.pop(itemtype)
+			# Use up one, if the item type is consumable.
+			if itemtype.consumable:
+				self.inventory[itemtype] -= 1
+				# Prune entries that reach zero.
+				if not self.inventory[itemtype]:
+					self.inventory.pop(itemtype)
+			# Make time step forwards, if the item uses up the round.
+			if itemtype.round_action:
+				w.time_step()
 		else:
 			show_message("No effect.")
 
@@ -427,12 +583,14 @@ class World:
 	NETHER_CRACK_PROBABILITY = 0.5
 	# For an enemy candidate location that can see x tiles the probability of spawning is:
 	#   1 - (1 - ENEMY_PROBABILITY) * e**(-x/ENEMY_TILE_CONSTANT)
-	ENEMY_PROBABILITY   = 0.25
-	ENEMY_TILE_CONSTANT = 40
+	ENEMY_PROBABILITY      = 0.25
+	ENEMY_TILE_CONSTANT    = 40
 	# One in this many chests spawned are worth double value.
-	SUPER_CHEST_ONE_IN  = 10
+	SUPER_CHEST_ONE_IN     = 10
+	# A super chest is worth this many times more than a regular one.
+	SUPER_CHEST_MULTIPLIER = 2
 	# A chest won't have more than this many items in it.
-	MAX_CHEST_CONTENTS  = 3
+	MAX_CHEST_CONTENTS     = 3
 
 	# Debugging rendering features.
 	print_steps = False
@@ -443,6 +601,7 @@ class World:
 		self.w, self.h = 2*self.coarse_w+1, 2*self.coarse_h+1
 		self.camera_track = (1, 1)
 		self.visible_count = {}
+		self.monsters = []
 
 	def build_world(self):
 		# XXX: DEBUG, GET RID OF LATER
@@ -679,7 +838,8 @@ class World:
 			# Only spawn the enemy with a probability that goes up with the number of visible tiles.
 			probability = 1.0 - (1.0 - self.ENEMY_PROBABILITY) * math.e**(-visible_tiles/float(self.ENEMY_TILE_CONSTANT))
 			if random.random() <= probability:
-				self.cells[spot].contents.append(Thing(Thing.ENEMY))
+				self.monsters.append(generate_enemy(spot, tiles=visible_tiles, steps=self.steps[spot]))
+#				self.cells[spot].contents.append(Thing(Thing.ENEMY))
 			# Find the visibility set of the new enemy, and eliminate those tiles.
 			disqualify_from(spot)
 			update()
@@ -717,6 +877,32 @@ class World:
 		self.full_rerender()
 		clear_entire_screen()
 
+	def time_step(self):
+		# TODO: Reduce the number of places this is checked.
+		# In an ideal world, it would be checked every single instant,
+		# but that is inefficient, so we just check occasionally.
+		self.check_state_based_effects()
+		# Build a pathing map for the monsters to use.
+		self.player_source_pathing_map = self.build_pathing_map(w.player.xy, [m.xy for m in self.monsters], doors_count=False)
+		# In each game time step let each monster do a time step.
+		for monster in self.monsters:
+			monster.do_ai()
+		# Next, have a combat round.
+		for monster in self.monsters:
+			monster.do_combat()
+		self.check_state_based_effects()
+
+	def check_state_based_effects(self):
+		# If the player has lost, alert him or her.
+		if self.player.should_die():
+			show_message("YOU ARE DEAD")
+			# XXX: For debugging, reset health.
+			self.player.hp = self.player.max_hp
+		# Eliminate the dead monsters.
+		for monster in self.monsters[:]:
+			if monster.should_die():
+				self.monsters.remove(monster)
+
 	def full_rerender(self):
 		self.dirty = set((x, y) for x in xrange(self.w) for y in xrange(self.h))
 
@@ -747,22 +933,57 @@ class World:
 			print red+"NOT CONNECTED"
 			exit()
 
-	def shortest_path(self, a, b, doors_count=True):
+	def build_pathing_map(self, source, points_to_include, doors_count=True):
+		# Build a pathing map (which xy to go to next) for each tile to get to source.
+		# The map is expanded until every point in points_to_include is included.
+		# The idea is that you can build a single pathing map if paths to one point
+		# need to be routed from many other points. (e.g. enemies to the player)
 		parent = {}
 		queue = Queue.Queue()
-		queue.put((None, a))
-		while not queue.empty():
+		queue.put((None, source))
+		points_to_include = set(points_to_include)
+		while points_to_include and not queue.empty():
 			prev, xy = queue.get()
 			if xy in parent: continue
 			parent[xy] = prev
-			for n in self.get_neighbors(xy):
+			if xy in points_to_include:
+				points_to_include.remove(xy)
+			neighbors = self.get_neighbors(xy)
+			random.shuffle(neighbors)
+			for n in neighbors:
 				if self.cells[n].is_passable(doors_count=doors_count):
 					queue.put((xy, n))
+		return parent
+
+	def shortest_path(self, a, b, doors_count=True):
+		parent = self.build_pathing_map(a, [b], doors_count=doors_count)
+#		parent = {}
+#		queue = Queue.Queue()
+#		queue.put((a, a))
+#		while not queue.empty():
+#			prev, xy = queue.get()
+#			if xy in parent: continue
+#			parent[xy] = prev
+#			if xy == b: break
+#			neighbors = self.get_neighbors(xy)
+#			random.shuffle(neighbors)
+#			for n in neighbors:
+#				if self.cells[n].is_passable(doors_count=doors_count):
+#					queue.put((xy, n))
 		# Trace back the path
 		path = [b]
 		while path[-1] is not None:
 			path.append(parent[path[-1]])
 		return path[-2::-1]
+
+	def check_if_unoccupied_by_people(self, xy):
+		# Check if there are monsters and no players in a given cell.
+		if xy == w.player.xy:
+			return False
+		for m in self.monsters:
+			if xy == m.xy:
+				return False
+		return True
 
 	def check_line_of_sight(self, a, b):
 		if a == b: return True
@@ -832,6 +1053,9 @@ class World:
 		self.print_character(2*xy[0]+1, xy[1], pattern[2:])
 
 	def pprint(self, everything=False):
+		monster_spots = {}
+		for monster in self.monsters:
+			monster_spots[monster.xy] = monster
 		def composite(a, b):
 			# Compose two characters, with b overlayed on a.
 			a1, a2 = a[:2], a[2:]
@@ -842,8 +1066,10 @@ class World:
 		def print_cell(x, y):
 			tile = self.cells[x, y]
 			s = tile.to_string()
+			# Draw obscuring fog.
 			if (not everything) and (x, y) not in self.revealed:
 				return foggy + ":" + foggy + ":"
+			# Render for debugging purposes.
 			if (x, y) in self.visible_count:
 				return blue + "X" + blue + "X"
 			# Mark the floors of magical realms.
@@ -862,6 +1088,9 @@ class World:
 			# Layer objects on top.
 			for thing in tile.contents:
 				s = composite(s, thing.to_string())
+			# Draw an appropriate monster on top.
+			if (x, y) in monster_spots:
+				s = composite(s, monster_spots[x, y].to_string())
 			if (x, y) == self.player.xy:
 				s = composite(s, player_color + "P" + __)
 			return s
@@ -962,7 +1191,7 @@ class Game:
 		for l in xrange(self.max_pane_line_reached+1):
 			info_pane.addstr(l, 0, full(""))
 		# Draw the status line at the top.
-		info_pane.addstr(0, 0, full("HP %i/%i, MP %i/%i" % (w.player.hp, w.player.hp_max, w.player.mp, w.player.mp_max)))
+		info_pane.addstr(0, 0, full("HP %i/%i, MP %i/%i" % (w.player.hp, w.player.max_hp, w.player.mp, w.player.max_mp)))
 		def draw_bar(y, proportion, color):
 			# Add the caps.
 			info_pane.addstr(y, 0, "[")
@@ -972,8 +1201,8 @@ class Game:
 			s += " " * (width - 2 - len(s))
 			info_pane.addstr(y, 1, s, curses.color_pair(color_mapping[color]))
 		# Draw the HP and MP bars.
-		draw_bar(1, w.player.hp/float(w.player.hp_max), red)
-		draw_bar(2, w.player.mp/float(w.player.mp_max), blue)
+		draw_bar(1, w.player.hp/float(w.player.max_hp), red)
+		draw_bar(2, w.player.mp/float(w.player.max_mp), blue)
 		line = [2]
 		def add_line(s):
 			line[0] += 1
@@ -995,6 +1224,14 @@ class Game:
 					add_line(" +%-2i gold" % thing.gold_content)
 		self.max_pane_line_reached = line[0]
 		info_pane.refresh()
+
+	def do_full_ui_update(self):
+		# This is THE function to call if you do something that modifies the game state,
+		# and you want it reflected in the GUI. You can potentially get away with calling
+		# just a different function, for greater efficiency, but this one will do everything.
+		w.pprint()
+		self.refresh_screen()
+		self.redraw_info_pane()
 
 	def main_loop(self, _stdscr):
 		global stdscr, world_pad, info_pane, w, screen_height, screen_width
@@ -1036,20 +1273,24 @@ class Game:
 		while True:
 			# Cast player vision.
 			w.see_from(w.player.xy)
-			# Update the world view.
-			w.pprint()
+			# Check for things like victory, and player death.
+			w.check_state_based_effects()
 			# Make the camera track the player for now.
 			w.camera_track = w.player.xy
-			self.refresh_screen()
-			self.redraw_info_pane()
+			# Update the UI.
+			self.do_full_ui_update()
 			# Get user input.
 			action = stdscr.getch(0, 0)
 			# Attempt to process as motion.
 			if action in direction_mapping:
 				delta = direction_mapping[action]
 				new_xy = w.player.xy[0]+delta[0], w.player.xy[1]+delta[1]
-				if w.cells[new_xy].is_passable(doors_count=False):
+				if w.cells[new_xy].is_passable(doors_count=False) and w.check_if_unoccupied_by_people(new_xy):
 					w.player.xy = new_xy
+					# Only do a time step if we actually move.
+					w.time_step()
+			elif action == ord("."):
+				w.time_step()
 			elif action == ord("u"):
 				# Use item.
 				item = get_input("Item to use: ").strip()
@@ -1096,29 +1337,46 @@ class Game:
 						w.player.gold += thing.gold_content
 				tile.contents = [thing for thing in tile.contents if thing.basic != Thing.GOLD]
 			elif action == ord("`"):
-				# Run a cheat
-				cheat = get_input("Cheat: ").strip()
-				if cheat == "show":
-					w.full_rerender()
-					for x in xrange(w.w):
-						for y in xrange(w.h):
-							w.revealed.add((x, y))
-				elif cheat == "hide":
-					w.full_rerender()
-					w.revealed = set()
-				elif cheat == "path":		
-					w.full_rerender()
-					w.print_paths ^= 1
-				elif cheat == "steps":
-					w.full_rerender()
-					w.print_steps ^= 1
-				elif cheat == "new":
-					w = World(35, 25)
-					w.build_world()
-				elif cheat == "items":
-					for item in item_type_list:
-						w.player.inventory[item] = 50
-
+				# All the rare commands.
+				rare = get_input("Command: ").strip()
+				if rare == "wait":
+					prompt = "Hit w to wait a full round, anything else to stop."
+					stdscr.addstr(screen_height-1, 0, prompt)
+					while True:
+						self.do_full_ui_update()
+						key = stdscr.getch(0, 0)
+						if key == ord("w"): w.time_step()
+						else: break
+					stdscr.addstr(screen_height-1, 0, " " * len(prompt))
+				elif rare == "cheat":
+					# Run a cheat
+					cheat = get_input("Cheat: ").strip()
+					if cheat == "show":
+						w.full_rerender()
+						for x in xrange(w.w):
+							for y in xrange(w.h):
+								w.revealed.add((x, y))
+					elif cheat == "hide":
+						w.full_rerender()
+						w.revealed = set()
+					elif cheat == "path":		
+						w.full_rerender()
+						w.print_paths ^= 1
+					elif cheat == "steps":
+						w.full_rerender()
+						w.print_steps ^= 1
+					elif cheat == "new":
+						w = World(35, 25)
+						w.build_world()
+					elif cheat == "items":
+						for item in item_type_list:
+							w.player.inventory[item] = 50
+					elif cheat == "aggro":
+						for m in w.monsters:
+							m.aggro = True
+					elif cheat == "unaggro":
+						for m in w.monsters:
+							m.aggro = False
 try:
 	stdscr = curses.initscr()
 	curses.start_color()
