@@ -20,6 +20,7 @@ class Thing:
 		self.is_super = False
 
 	def populate_gold(self, value_rating):
+		value_rating *= 10
 		# Rule: A chest will rarely contain an item that is worth more than the value_rating.
 		self.gold_content = 0
 		if random.randrange(0, w.SUPER_CHEST_ONE_IN) == 0:
@@ -60,17 +61,17 @@ class Combatant:
 		self.hp = self.max_hp
 		self.mp = self.max_mp
 
-	def animate_simple_attack(self, a, b, graphic=red + "\xff" + red + "\xff"):
+	def animate_simple_attack(self, a, b, attacker_graphic=yellow + "\xff" + yellow + "\xff", target_graphic=red + "\xff" + red + "\xff"):
 		# A convenience call for animating attacks.
 		w.pprint()
 		g.refresh_screen()
-		time.sleep(0.2)
-		w.print_pattern(a.xy, graphic)
-		w.print_pattern(b.xy, graphic)
+		time.sleep(0.1)
+		w.print_pattern(a.xy, attacker_graphic)
+		w.print_pattern(b.xy, target_graphic)
 		g.refresh_screen()
-		time.sleep(0.2)
+		time.sleep(0.1)
 		w.pprint()
-		time.sleep(0.2)
+		time.sleep(0.1)
 
 	def take_hit(self, attack):
 		damage = attack["damage"]
@@ -112,6 +113,8 @@ class EnemyType(Combatant):
 	# If the player cheats the difficulty this high, he or she will see
 	# some weird error enemies, which will be fun.
 	difficulty = 1000000
+	# If the enemy is out of sight, does it deaggro?
+	deaggro_if_out_of_sight = False
 
 	def __init__(self, xy):
 		Combatant.__init__(self)
@@ -123,6 +126,8 @@ class EnemyType(Combatant):
 		# Check to see if we can see the player.
 		if w.player.xy in w.visible_set(self.xy):
 			self.aggro = True
+		elif self.deaggro_if_out_of_sight:
+			self.aggro = False
 		if not self.aggro: return
 		neighbors = w.get_neighbors(self.xy) + [self.xy]
 		# If the player is by us, and we're supposed to stop if next to them, do so.
@@ -160,12 +165,17 @@ class EnemyType(Combatant):
 class Zombie(EnemyType):
 	display_string = teal + "z" + __
 	# Make zombies stumble around a lot.
-	random_walk_probability = 0.5
+	random_walk_probability = 0.35
 	max_hp = 2
 	xp_granted = 3
 	difficulty = 10
 	has_melee_attack = True
 	melee_attack = {"damage": 1}
+
+class Projectile:
+	def __init__(self, xy, target, desc):
+		self.xy, self.target, self.desc = xy, target, desc
+		g.dynamic_objects.append(self)
 
 class Tile:
 	TILE_STRINGS = [
@@ -216,8 +226,17 @@ class Tile:
 item_type_list = []
 def item(cls):
 	cls.sort_index = len(item_type_list)
-	item_type_list.append(cls())
+	instance = cls()
+	instance.parent_class = cls
+	item_type_list.append(instance)
+	for modifier in instance.modifiers:
+		item_type_list.append(modifier().make_modified_version(instance))
 	return cls
+
+def get_item_type_by_name(name):
+	for item_type in item_type_list:
+		if item_type.name == name:
+			return item_type
 
 class ItemType:
 	name = "???"
@@ -225,12 +244,18 @@ class ItemType:
 	usable = False
 	directional = False
 	consumable = True
-	round_action = False
+	rounds_to_use = 0
+	mp_to_use = 0
 	magical = False
 	greater = False
+	modifiers = []
 	value = 0
 
 	def use(self):
+		# Check if the mp cost is met.
+		if w.player.mp < self.mp_to_use:
+			show_message("Insufficient MP.")
+			return False
 		extra = {}
 		if self.directional:
 			direction = get_direction()
@@ -238,16 +263,46 @@ class ItemType:
 			if direction is None:
 				return False
 			extra["direction"] = direction
-		return self.activate(**extra)
+		success = self.activate(**extra)
+		# Make the player pay the MP cost.
+		if success:
+			w.player.mp -= self.mp_to_use
+		return success
+
+@item
+class MagicPotion(ItemType):
+	name = "potion"
+	long_name = "Magic Potion"
+	description = "A magical potion, bubbling with 10 MP worth of energies."
+	value = 10
+	rounds_to_use = 2
+	principle = 10
+
+	def activate(self):
+		# Refuse to activate the potion if the player has full MP.
+		if w.player.mp >= w.player.max_mp:
+			return False
+		w.player.mp = min(w.player.max_mp, w.player.mp + self.principle)
+		return True
+
+@item
+class GreaterMagicPotion(MagicPotion):
+	name = "g-potion"
+	long_name = "Greater Magic Potion"
+	description = "A large magical potion, bubbling with 30 MP worth of energies."
+	value = 30
+	rounds_to_use = 3
+	greater = True
+	principle = 30
 
 @item
 class ItemKey(ItemType):
 	name = "key"
 	long_name = "Key"
 	description = "A small plain key."
-	usable = True
 	directional = True
 	value = 5
+	rounds_to_use = 1
 
 	def activate(self, direction=None):
 		# See if there's a door next to the player.
@@ -267,6 +322,7 @@ class ItemMagicalKey(ItemKey):
 	description = "A purple glowing key."
 	magical = True
 	value = 50
+	rounds_to_use = 2
 
 @item
 class ScrollOfSeeing(ItemType):
@@ -274,6 +330,8 @@ class ScrollOfSeeing(ItemType):
 	long_name = "Scroll of Seeing"
 	description = "A blue scroll that allows you to see around corners."
 	value = 10
+	mp_to_use = 2
+	rounds_to_use = 1
 
 	def activate(self):
 		locations = set((w.player.xy,))
@@ -301,6 +359,8 @@ class GreaterScrollOfSeeing(ScrollOfSeeing):
 	description = "A large blue scroll that allows you to see far around corners."
 	greater = True 
 	value = 35
+	mp_to_use = 4
+	rounds_to_use = 2
 
 @item
 class ScrollOfRevelation(ItemType):
@@ -308,6 +368,8 @@ class ScrollOfRevelation(ItemType):
 	long_name = "Scroll of Revelation"
 	description = "A green scroll that allows you to see through walls."
 	value = 30
+	mp_to_use = 5
+	rounds_to_use = 1
 
 	def activate(self):
 		radius = 10 + self.greater * 5
@@ -336,6 +398,8 @@ class GreaterScrollOfRevelation(ScrollOfRevelation):
 	description = "A large green scroll that allows you to see far through walls."
 	greater = True
 	value = 100
+	mp_to_use = 10
+	rounds_to_use = 2
 
 @item
 class ScrollOfTeleportation(ItemType):
@@ -343,6 +407,8 @@ class ScrollOfTeleportation(ItemType):
 	long_name = "Scroll of Teleportation"
 	description = "A small yellow scroll that transports the user to undiscovered territory. Be careful what you land on!"
 	value = 85
+	mp_to_use = 15 #25
+	rounds_to_use = 3
 
 	def activate(self):
 		if self.greater:
@@ -395,6 +461,8 @@ class GreaterScrollOfTeleportation(ScrollOfTeleportation):
 	description = "A yellow scroll that transports the user. Be careful what you land on!"
 	value = 450
 	greater = True
+	mp_to_use = 15 #50
+	rounds_to_use = 4
 
 @item
 class AnkhOfRetreat(ItemType):
@@ -402,6 +470,8 @@ class AnkhOfRetreat(ItemType):
 	long_name = "Ankh of Retreat"
 	description = "Break in case of emergency."
 	value = 120
+	mp_to_use = 15 # 30
+	rounds_to_use = 4
 
 	def activate(self):
 		while True:
@@ -424,6 +494,8 @@ class ScryingOrb(ItemType):
 	long_name = "Scrying Orb"
 	description = "A pale blue orb, filled with mists."
 	value = 35
+	mp_to_use = 1
+	rounds_to_use = 1
 
 	def activate(self):
 		result = get_location_selection("Scry where?", lambda xy: True)
@@ -440,6 +512,8 @@ class BlinkPowder(ItemType):
 	long_name = "Blink Powder"
 	description = "Sprinkling a little of this dust lets you jump about within eye-sight."
 	value = 60
+	mp_to_use = 1
+	rounds_to_use = 1
 
 	def activate(self):
 		while True:
@@ -461,6 +535,8 @@ class DemolitionWand(ItemType):
 	description = "Breaks down some walls."
 	directional = True
 	value = 300
+	mp_to_use = 8
+	rounds_to_use = 3
 
 	def activate(self, direction=None):
 		tile = w.cells[w.player.get_in_direction(direction)]
@@ -469,12 +545,74 @@ class DemolitionWand(ItemType):
 			return True
 		return False
 
+# Weapon modifiers
+
+class ItemModifier:
+	name_prefix = name_suffix = ""
+	long_name_prefix = long_name_suffix = ""
+	value_multiplier = 1.0
+
+	def make_modified_version(self, itemtype):
+		newtype = itemtype.parent_class()
+		newtype.name = self.name_prefix + newtype.name + self.name_suffix
+		newtype.long_name = self.long_name_prefix + newtype.long_name + self.long_name_suffix
+		newtype.value = int(self.value_multiplier * newtype.value)
+		if hasattr(itemtype, "melee_attack"):
+			newtype.melee_attack = itemtype.melee_attack.copy()
+		self.effect(newtype)
+		return newtype
+
+class SwiftWeapon(ItemModifier):
+	name_prefix = "swift-"
+	long_name_prefix = "Swift "
+	value_multiplier = 2.0
+
+	def effect(self, newtype):
+		newtype.rounds_to_use -= 1
+
+class HeavyWeapon(ItemModifier):
+	name_prefix = "heavy-"
+	long_name_prefix = "Heavy "
+	value_multiplier = 1.0
+
+	def effect(self, newtype):
+		newtype.rounds_to_use += 1
+		newtype.melee_attack["damage"] += 1
+
+class SharpWeapon(ItemModifier):
+	name_prefix = "sharp-"
+	long_name_prefix = "Sharp "
+	value_multiplier = 1.5
+
+	def effect(self, newtype):
+		newtype.melee_attack["damage"] += 1
+
+class DullWeapon(ItemModifier):
+	name_prefix = "dull-"
+	long_name_prefix = "Dull "
+	value_multiplier = 0.5
+
+	def effect(self, newtype):
+		newtype.melee_attack["damage"] -= 1
+
+class CursedWeapon(ItemModifier):
+	name_prefix = "cursed-"
+	long_name_prefix = "Cursed "
+	value_multiplier = 1.0
+
+	def effect(self, newtype):
+		newtype.melee_attack["damage"] += 1
+		newtype.mp_to_use += newtype.melee_attack["damage"]
+
+melee_weapon_modifiers = [SwiftWeapon, HeavyWeapon, SharpWeapon, DullWeapon, CursedWeapon]
+
 # Weapons
 
 class MeleeWeapon(ItemType):
 	consumable = False
 	directional = True
-	round_action = True
+	rounds_to_use = 1
+	modifiers = melee_weapon_modifiers
 
 	def activate(self, direction=None):
 		flag = False
@@ -492,6 +630,7 @@ class Knife(MeleeWeapon):
 	description = "A meager melee weapon."
 	value = 15
 	melee_attack = {"damage": 1}
+	rounds_to_use = 2
 
 @item
 class Sword(MeleeWeapon):
@@ -500,6 +639,7 @@ class Sword(MeleeWeapon):
 	description = "A simple melee weapon."
 	value = 45
 	melee_attack = {"damage": 2}
+	rounds_to_use = 5
 
 class Player(Combatant):
 	def __init__(self):
@@ -508,12 +648,16 @@ class Player(Combatant):
 		self.inventory = {}
 		self.level = 1
 		self.xp = 0
-		self.max_hp = 8
+		self.max_hp = 14
 		self.max_mp = 20
+		self.mp_regen_rate = 0.1 # Units of MP per time step.
+		self.fractional_mp = 0.0
 		Combatant.__init__(self)
 		# For debugging, give the play 50 of every item.
 #		for item in item_type_list:
 #			self.inventory[item] = 50
+		# Give the player an initial offering of weapons.
+		self.inventory[get_item_type_by_name("sword")] = 1
 
 	def lookup_item(self, name):
 		for itemtype, count in self.inventory.iteritems():
@@ -539,14 +683,30 @@ class Player(Combatant):
 				if not self.inventory[itemtype]:
 					self.inventory.pop(itemtype)
 			# Make time step forwards, if the item uses up the round.
-			if itemtype.round_action:
+			for i in xrange(itemtype.rounds_to_use):
 				w.time_step()
+				# Put a little delay between the steps.
+				if i < itemtype.rounds_to_use-1:
+					g.do_full_ui_update()
+					# If someone is aggroed, then let them take extra turns.
+					if w.someone_aggroed():
+						time.sleep(0.2)
+						g.do_full_ui_update()
 		else:
 			show_message("No effect.")
 
 	def get_in_direction(self, direction_code):
 		delta = direction_mapping[direction_code]
 		return self.xy[0] + delta[0], self.xy[1] + delta[1]
+
+	def do_ai(self):
+		# If no one is aggroed, just let the player have full MP.
+		if not w.someone_aggroed():
+			self.mp = self.max_mp
+		self.fractional_mp += self.mp_regen_rate
+		while self.fractional_mp >= 1:
+			self.fractional_mp -= 1
+			self.mp = min(self.max_mp, self.mp+1)
 
 # Some global computations.
 cut_patterns = []
@@ -602,6 +762,7 @@ class World:
 		self.camera_track = (1, 1)
 		self.visible_count = {}
 		self.monsters = []
+		self.dynamic_objects = []
 
 	def build_world(self):
 		# XXX: DEBUG, GET RID OF LATER
@@ -884,9 +1045,14 @@ class World:
 		self.check_state_based_effects()
 		# Build a pathing map for the monsters to use.
 		self.player_source_pathing_map = self.build_pathing_map(w.player.xy, [m.xy for m in self.monsters], doors_count=False)
+		# Let the player update.
+		self.player.do_ai()
 		# In each game time step let each monster do a time step.
 		for monster in self.monsters:
 			monster.do_ai()
+		# Then, update all the dynamic objects. (projectiles, etc.)
+		for dynamic in self.dynamic_objects:
+			dynamic.time_step()
 		# Next, have a combat round.
 		for monster in self.monsters:
 			monster.do_combat()
@@ -895,13 +1061,18 @@ class World:
 	def check_state_based_effects(self):
 		# If the player has lost, alert him or her.
 		if self.player.should_die():
+			g.do_full_ui_update()
 			show_message("YOU ARE DEAD")
 			# XXX: For debugging, reset health.
-			self.player.hp = self.player.max_hp
+			#self.player.hp = self.player.max_hp
+			exit()
 		# Eliminate the dead monsters.
 		for monster in self.monsters[:]:
 			if monster.should_die():
 				self.monsters.remove(monster)
+
+	def someone_aggroed(self):
+		return any(m.aggro for m in self.monsters)
 
 	def full_rerender(self):
 		self.dirty = set((x, y) for x in xrange(self.w) for y in xrange(self.h))
@@ -1053,9 +1224,14 @@ class World:
 		self.print_character(2*xy[0]+1, xy[1], pattern[2:])
 
 	def pprint(self, everything=False):
-		monster_spots = {}
-		for monster in self.monsters:
-			monster_spots[monster.xy] = monster
+		# This ordering defines which overlay objects are drawn on top of which.
+		overlay_spots = {}
+		def add(obj):
+			if obj.xy not in overlay_spots:
+				overlay_spots[obj.xy] = []
+			overlay_spots[obj.xy].append(obj)
+		map(add, self.monsters)
+		map(add, self.dynamic_objects)
 		def composite(a, b):
 			# Compose two characters, with b overlayed on a.
 			a1, a2 = a[:2], a[2:]
@@ -1073,7 +1249,7 @@ class World:
 			if (x, y) in self.visible_count:
 				return blue + "X" + blue + "X"
 			# Mark the floors of magical realms.
-			if (x, y) not in self.steps_doors_dont_count:
+			if (x, y) not in self.steps_doors_dont_count and not everything:
 				if s == __ + __:
 					s = purple + "." + __
 				elif s == gray + "_" + __:
@@ -1088,9 +1264,10 @@ class World:
 			# Layer objects on top.
 			for thing in tile.contents:
 				s = composite(s, thing.to_string())
-			# Draw an appropriate monster on top.
-			if (x, y) in monster_spots:
-				s = composite(s, monster_spots[x, y].to_string())
+			# Draw any appropriate monsters, projectiles, or other objects on top.
+			if (x, y) in overlay_spots:
+				for overlay_object in overlay_spots[x, y]:
+					s = composite(s, overlay_object.to_string())
 			if (x, y) == self.player.xy:
 				s = composite(s, player_color + "P" + __)
 			return s
@@ -1260,6 +1437,7 @@ class Game:
 		self.info_pane_size = screen_width - self.map_size[0], screen_height
 		self.textbox_size = self.map_size[0], 1
 
+#		w = World(20, 15)
 		w = World(35, 25)
 
 		# Allocate a pad to store the rendered map.
