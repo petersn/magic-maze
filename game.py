@@ -60,6 +60,7 @@ class Combatant:
 	def __init__(self):
 		self.hp = self.max_hp
 		self.mp = self.max_mp
+		self.stun = 0
 
 	def animate_simple_attack(self, a, b, attacker_graphic=yellow + "\xff" + yellow + "\xff", target_graphic=red + "\xff" + red + "\xff"):
 		# A convenience call for animating attacks.
@@ -78,6 +79,9 @@ class Combatant:
 		# Do damage adjustment.
 		if damage > 0:
 			damage = max(1, damage - self.armor)
+		# Do stun adjustment.
+		if "stun" in attack:
+			self.stun = max(self.stun, attack["stun"])
 		self.hp = max(0, self.hp - damage)
 
 	def do_melee_attack(self, target, melee_attack):
@@ -94,7 +98,52 @@ def enemy(cls):
 	return cls
 
 def generate_enemy(xy, tiles=1, steps=1):
-	return Zombie(xy)
+	difficulty_rating = (steps * tiles) / 1000.0
+	enemy_type = random.choice([e for e in enemy_type_list if e.difficulty <= difficulty_rating])
+	# Determine whether or not to place a hidden enemy.
+	if random.random() <= enemy_type.hidden_probability:
+		# Place a hidden enemy.
+		w.dynamic_objects.append(HiddenEnemy(xy, enemy_type))
+	else:
+		# Otherwise, simply place the enemy.
+		w.monsters.append(enemy_type(xy))
+
+class DynamicObject:
+	do_cull = False
+
+	def to_string(self):
+		return red + "D" + red + "O"
+
+	def should_die(self):
+		return self.do_cull
+
+class HiddenEnemy(DynamicObject):
+	# The player must be visible, and at least this many steps (or as many as are visible) ahead of the player.
+	steps_required_to_unhide = 3
+
+	def __init__(self, xy, enemy_type):
+		self.xy, self.enemy_type = xy, enemy_type
+		max_visible_steps = max(w.steps[loc]-w.steps[self.xy] for loc in w.visible_set(self.xy) if loc in w.steps)
+		# Sometimes, no cell is visible with enough steps.
+		# In this case, simply require as many steps as required to the furthest away visible cell.
+		self.steps_required_to_unhide = min(max_visible_steps, self.steps_required_to_unhide)
+
+	def to_string(self):
+		return __ + __
+
+	def time_step(self):
+		if w.player.xy in w.visible_set(self.xy) and \
+			w.steps[self.xy] + self.steps_required_to_unhide <= w.steps[w.player.xy]:
+			self.do_cull = True
+			monster = self.enemy_type(self.xy)
+			# Auto aggro unhidden enemies, and disable their deaggro.
+			monster.aggro = True
+			monster.deaggro_if_out_of_sight = False
+			# Prevent a freshly spawned enemy adjacent to the player
+			# from immediately attacking by stunning it for a round.
+			if self.steps_required_to_unhide <= 1 or monster.can_move_then_attack:
+				monster.stun = 1
+			w.monsters.append(monster)
 
 class EnemyType(Combatant):
 	display_string = red + "E" + red +"R"
@@ -103,7 +152,10 @@ class EnemyType(Combatant):
 	# The distance this enemy will try to get from the player. TODO: make work
 	desired_distance = 0
 	# This is the probability that any given move will instead be a random walk step.
-	random_walk_probability = 0.3
+	random_walk_probability = 0.0
+	# This is the probability that the enemy spawns as a hidden enemy,
+	# that jumps out when you surpass it in step count.
+	hidden_probability = 0.5
 	has_melee_attack = False
 	# If this flag is set then the enemy won't move in a round it starts by the player in.
 	# This is mostly useful for enemies that can't move then attack in one round.
@@ -120,8 +172,13 @@ class EnemyType(Combatant):
 		Combatant.__init__(self)
 		self.xy = xy
 		self.aggro = False
+		self.moved_this_round = False
 
 	def do_ai(self):
+		# Check if stunned.
+		if self.stun > 0:
+			self.stun -= 1
+			return
 		start_pos = self.xy
 		# Check to see if we can see the player.
 		if w.player.xy in w.visible_set(self.xy):
@@ -149,7 +206,7 @@ class EnemyType(Combatant):
 		self.moved_this_round = start_pos != self.xy
 
 	def do_combat(self):
-		if not self.aggro: return
+		if self.stun or not self.aggro: return
 		# Check if the player is adjacent, and if we're allowed to attack and move in the same turn.
 		if self.has_melee_attack and (self.can_move_then_attack or not self.moved_this_round) and w.player.xy in w.get_neighbors(self.xy):
 			self.do_melee_attack(w.player, self.melee_attack)
@@ -162,6 +219,16 @@ class EnemyType(Combatant):
 		return self.display_string
 
 @enemy
+class Gnat(EnemyType):
+	display_string = teal + "\"" + __
+	random_walk_probability = 0.1
+	max_hp = 1
+	xp_granted = 1
+	difficulty = 0
+	has_melee_attack = True
+	melee_attack = {"damage": 1}
+
+@enemy
 class Zombie(EnemyType):
 	display_string = teal + "z" + __
 	# Make zombies stumble around a lot.
@@ -172,10 +239,21 @@ class Zombie(EnemyType):
 	has_melee_attack = True
 	melee_attack = {"damage": 1}
 
+@enemy
+class BigZombie(EnemyType):
+	display_string = teal + "Z" + __
+	random_walk_probability = 0.2
+	max_hp = 8
+	xp_granted = 40
+	difficulty = 100
+	armor = 1
+	has_melee_attack = True
+	melee_attack = {"damage": 2}
+
 class Projectile:
 	def __init__(self, xy, target, desc):
 		self.xy, self.target, self.desc = xy, target, desc
-		g.dynamic_objects.append(self)
+		w.dynamic_objects.append(self)
 
 class Tile:
 	TILE_STRINGS = [
@@ -557,6 +635,7 @@ class ItemModifier:
 		newtype.name = self.name_prefix + newtype.name + self.name_suffix
 		newtype.long_name = self.long_name_prefix + newtype.long_name + self.long_name_suffix
 		newtype.value = int(self.value_multiplier * newtype.value)
+		# Don't mutate the parent's copy of the attack!
 		if hasattr(itemtype, "melee_attack"):
 			newtype.melee_attack = itemtype.melee_attack.copy()
 		self.effect(newtype)
@@ -624,12 +703,21 @@ class MeleeWeapon(ItemType):
 		return flag
 
 @item
+class BambooStick(MeleeWeapon):
+	name = "stick"
+	long_name = "Bamboo Stick"
+	description = "A stick made of bamboo."
+	value = 8
+	melee_attack = {"damage": 1, "stun": 3}
+	rounds_to_use = 4
+
+@item
 class Knife(MeleeWeapon):
 	name = "knife"
 	long_name = "Knife"
 	description = "A meager melee weapon."
 	value = 15
-	melee_attack = {"damage": 1}
+	melee_attack = {"damage": 1, "stun": 1}
 	rounds_to_use = 2
 
 @item
@@ -638,8 +726,8 @@ class Sword(MeleeWeapon):
 	long_name = "Sword"
 	description = "A simple melee weapon."
 	value = 45
-	melee_attack = {"damage": 2}
-	rounds_to_use = 5
+	melee_attack = {"damage": 2, "stun": 2}
+	rounds_to_use = 3
 
 class Player(Combatant):
 	def __init__(self):
@@ -648,8 +736,8 @@ class Player(Combatant):
 		self.inventory = {}
 		self.level = 1
 		self.xp = 0
-		self.max_hp = 14
-		self.max_mp = 20
+		self.max_hp = 8
+		self.max_mp = 6
 		self.mp_regen_rate = 0.1 # Units of MP per time step.
 		self.fractional_mp = 0.0
 		Combatant.__init__(self)
@@ -657,7 +745,7 @@ class Player(Combatant):
 #		for item in item_type_list:
 #			self.inventory[item] = 50
 		# Give the player an initial offering of weapons.
-		self.inventory[get_item_type_by_name("sword")] = 1
+		self.inventory[get_item_type_by_name("stick")] = 1
 
 	def lookup_item(self, name):
 		for itemtype, count in self.inventory.iteritems():
@@ -721,6 +809,7 @@ direction_mapping = {ord("w"): (0, -1), ord("a"): (-1, 0), ord("s"): (0, 1), ord
 
 class World:
 	GAP_PROPORTION    = 0.07
+	HOLE_PROPORTION   = 0.01
 	DOOR_PROPORTION   = 0.2
 	GOLD_PROPORTION   = 0
 	ROOM_PROPORTION   = 0.035
@@ -820,13 +909,13 @@ class World:
 		# At this point the maze is a tree.
 		# Add some random gaps.
 #P#		print "Placing cracks and rooms."
-		for i in xrange(int(self.GAP_PROPORTION * self.coarse_w * self.coarse_h)):
-			xy = self.random_wall()
-			# Make sure the wall isn't fully surrouneded, or we would (trivially) disconnect the graph!
-			# This is important!
-			if any(self.cells[n].basic == Tile.BLANK for n in self.get_neighbors(xy)):
-				self.cells[xy] = Tile(Tile.BLANK)
-			rare_update(10)
+		for prop, func in ((self.GAP_PROPORTION, self.random_wall), (self.HOLE_PROPORTION, self.random_tile)):
+			for i in xrange(int(prop * self.coarse_w * self.coarse_h)):
+				xy = func()
+				# Make sure the wall isn't fully surrouneded, or we would (trivially) disconnect the graph!
+				# This is important!
+				if any(self.cells[n].basic == Tile.BLANK for n in self.get_neighbors(xy)):
+					self.cells[xy] = Tile(Tile.BLANK)
 		update()
 		# Add some rooms.
 		for i in xrange(int(self.ROOM_PROPORTION * self.coarse_w * self.coarse_h)):
@@ -999,7 +1088,7 @@ class World:
 			# Only spawn the enemy with a probability that goes up with the number of visible tiles.
 			probability = 1.0 - (1.0 - self.ENEMY_PROBABILITY) * math.e**(-visible_tiles/float(self.ENEMY_TILE_CONSTANT))
 			if random.random() <= probability:
-				self.monsters.append(generate_enemy(spot, tiles=visible_tiles, steps=self.steps[spot]))
+				generate_enemy(spot, tiles=visible_tiles, steps=self.steps[spot])
 #				self.cells[spot].contents.append(Thing(Thing.ENEMY))
 			# Find the visibility set of the new enemy, and eliminate those tiles.
 			disqualify_from(spot)
@@ -1064,12 +1153,16 @@ class World:
 			g.do_full_ui_update()
 			show_message("YOU ARE DEAD")
 			# XXX: For debugging, reset health.
-			#self.player.hp = self.player.max_hp
-			exit()
+			self.player.hp = self.player.max_hp
+			#exit()
 		# Eliminate the dead monsters.
 		for monster in self.monsters[:]:
 			if monster.should_die():
 				self.monsters.remove(monster)
+		# Eliminate the dead dynamic objects.
+		for dynamic in self.dynamic_objects[:]:
+			if dynamic.should_die():
+				self.dynamic_objects.remove(dynamic)
 
 	def someone_aggroed(self):
 		return any(m.aggro for m in self.monsters)
@@ -1201,7 +1294,7 @@ class World:
 		return (2*random.randrange(0, self.w/2)+1, 2*random.randrange(0, self.h/2)+1)
 
 	def random_tile(self):
-		return (random.randrange(1, self.w), random.randrange(1, self.h))
+		return (random.randrange(1, self.w-1), random.randrange(1, self.h-1))
 
 	def random_wall(self):
 		return (2*random.randrange(1, self.w/2), 2*random.randrange(1, self.h/2))
@@ -1437,8 +1530,8 @@ class Game:
 		self.info_pane_size = screen_width - self.map_size[0], screen_height
 		self.textbox_size = self.map_size[0], 1
 
-#		w = World(20, 15)
-		w = World(35, 25)
+		w = World(20, 15)
+#		w = World(35, 25)
 
 		# Allocate a pad to store the rendered map.
 		# DEBUG: It seems to want an extra column, for some reason I can't figure out. :(
