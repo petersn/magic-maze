@@ -347,6 +347,28 @@ class ItemType:
 			w.player.mp -= self.mp_to_use
 		return success
 
+	def get_long_info(self):
+		# This is the function called to produce the info pane text gotten with the "i" command.
+		lines = [self.long_name + " (" +self.name + ")"]
+		lines.append(self.description)
+		def print_according_to(obj, d, has=hasattr, get=getattr):
+			for name, var, show_if_zero in d:
+				if has(obj, var):
+					v = get(obj, var)
+					if v or show_if_zero:
+						lines.append("%s: %s" % (name, v))
+		print_according_to(self, [
+			("MP", "mp_to_use", False),
+			("Rounds", "rounds_to_use", True),
+		])
+		if hasattr(self, "melee_attack"):
+			lines.append("Melee attack:")
+			print_according_to(self.melee_attack, [
+				("  Damage", "damage", True),
+				("  Stun" , "stun", False),
+			], has=lambda x, y: y in x, get=lambda x, y: x[y])
+		return "\n".join(lines)
+
 @item
 class MagicPotion(ItemType):
 	name = "potion"
@@ -838,8 +860,8 @@ class World:
 	SUPER_CHEST_ONE_IN     = 10
 	# A super chest is worth this many times more than a regular one.
 	SUPER_CHEST_MULTIPLIER = 2
-	# A chest won't have more than this many items in it.
-	MAX_CHEST_CONTENTS     = 3
+	# A chest won't have more than this many items in it. (gold isn't an item)
+	MAX_CHEST_CONTENTS     = 2
 
 	# Debugging rendering features.
 	print_steps = False
@@ -1376,6 +1398,10 @@ def show_message(msg):
 	stdscr.getch(0, 0)
 	stdscr.addstr(screen_height-1, 0, " "*len(msg))
 
+def show_info_pane_message(msg):
+	g.redraw_info_pane_with_lines_of_text(msg.split("\n"))
+	stdscr.getch(0, 0)
+
 def get_input(prompt):
 	stdscr.addstr(screen_height-1, 0, prompt)
 	# Request a string.
@@ -1453,46 +1479,83 @@ class Game:
 		else:
 			world_pad.refresh(self.view_y, self.view_x*2, 0, 0, self.map_size[1]-1, self.map_size[0]-1)
 
-	def redraw_info_pane(self):
+	def full(self, s):
+		return s + " " * (self.info_pane_size[0] - len(s))
+
+	def draw_bar(self, y, proportion, color):
 		width = self.info_pane_size[0]
-		def full(s):
-			return s + " " * (width - len(s))
+		# Add the caps.
+		info_pane.addstr(y, 0, "[")
+		info_pane.addstr(y, width-1, "]")
+		# Add the middle.
+		s = "=" * int((width-2) * proportion)
+		s += " " * (width - 2 - len(s))
+		info_pane.addstr(y, 1, s, curses.color_pair(color_mapping[color]))
+
+	def add_line(self, s):
+		self.line_index += 1
+		info_pane.addstr(self.line_index, 0, self.full(s))
+
+	def print_item_listing(self, inventory):
+		inv = sorted(inventory.items(), key=lambda x: x[0].sort_index)
+		for itemtype, count in inv:
+			self.add_line(" %2i) %s " % (count, itemtype.name))
+
+	def redraw_info_pane_important_top_stuff(self):
 		# Clear out the old status pane.
 		for l in xrange(self.max_pane_line_reached+1):
-			info_pane.addstr(l, 0, full(""))
+			info_pane.addstr(l, 0, self.full(""))
 		# Draw the status line at the top.
-		info_pane.addstr(0, 0, full("HP %i/%i, MP %i/%i" % (w.player.hp, w.player.max_hp, w.player.mp, w.player.max_mp)))
-		def draw_bar(y, proportion, color):
-			# Add the caps.
-			info_pane.addstr(y, 0, "[")
-			info_pane.addstr(y, width-1, "]")
-			# Add the middle.
-			s = "=" * int((width-2) * proportion)
-			s += " " * (width - 2 - len(s))
-			info_pane.addstr(y, 1, s, curses.color_pair(color_mapping[color]))
+		info_pane.addstr(0, 0, self.full("HP %i/%i, MP %i/%i" % (w.player.hp, w.player.max_hp, w.player.mp, w.player.max_mp)))
 		# Draw the HP and MP bars.
-		draw_bar(1, w.player.hp/float(w.player.max_hp), red)
-		draw_bar(2, w.player.mp/float(w.player.max_mp), blue)
-		line = [2]
-		def add_line(s):
-			line[0] += 1
-			info_pane.addstr(line[0], 0, full(s))
-		def print_item_listing(inventory):
-			inv = sorted(inventory.items(), key=lambda x: x[0].sort_index)
-			for itemtype, count in inv:
-				add_line(" %2i) %s " % (count, itemtype.name))
+		self.draw_bar(1, w.player.hp/float(w.player.max_hp), red)
+		self.draw_bar(2, w.player.mp/float(w.player.max_mp), blue)
+		self.line_index = 2
+
+	def reformat_to_width(self, lines):
+		# Split up the text into lines that don't overflow the pane width.
+		width = self.info_pane_size[0]
+		out_lines = []
+		for line in lines:
+			while len(line) > width:
+				# Try to split up the line by spaces.
+				line = line.split(" ")
+				so_far = []
+				while sum(map(len, so_far)) + len(so_far) - 1 + len(line[0]) <= width:
+					so_far.append(line.pop(0))
+				# Sometimes, we may fail, and not be able to split by spaces.
+				# This occurs when one word is longer than the width.
+				# In this case, simply split as much as you can.
+				line = " ".join(line)
+				if not so_far:
+					so_far = [line[:width]]
+					line = line[width:]
+				out_lines.append(" ".join(so_far))
+			out_lines.append(line)
+		return out_lines
+
+	def redraw_info_pane_with_lines_of_text(self, lines):
+		# This function is used to render
+		self.redraw_info_pane_important_top_stuff()
+		lines = self.reformat_to_width(lines)
+		map(self.add_line, lines)
+		self.max_pane_line_reached = self.line_index
+		info_pane.refresh()
+
+	def redraw_info_pane(self):
+		self.redraw_info_pane_important_top_stuff()
 		# Draw the inventory.
-		add_line("Inventory: (%i gold)" % w.player.gold)
-		print_item_listing(w.player.inventory)
+		self.add_line("Inventory: (%i gold)" % w.player.gold)
+		self.print_item_listing(w.player.inventory)
 		# Check if the player is over a treasure chest.
 		tile = w.cells[w.player.xy]
 		for thing in tile.contents:
 			if thing.basic == Thing.GOLD:
-				add_line("Chest: (l to loot)")
-				print_item_listing(thing.inventory)
+				self.add_line("Chest: (l to loot)")
+				self.print_item_listing(thing.inventory)
 				if thing.gold_content != 0:
-					add_line(" +%-2i gold" % thing.gold_content)
-		self.max_pane_line_reached = line[0]
+					self.add_line(" +%-2i gold" % thing.gold_content)
+		self.max_pane_line_reached = self.line_index
 		info_pane.refresh()
 
 	def do_full_ui_update(self):
@@ -1595,7 +1658,8 @@ class Game:
 				if item is None:
 					show_message("No matching item.")
 					continue
-				show_message(item.long_name + ": " + item.description)
+				show_info_pane_message(item.get_long_info())
+				#show_message(item.long_name + ": " + item.description)
 			elif action == ord("c"):
 				# Free camera control mode.
 				prompt = "Free camera control. (esc/enter to cancel)"
