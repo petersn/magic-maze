@@ -1414,6 +1414,12 @@ def get_input(prompt):
 	stdscr.addstr(screen_height-1, 0, " " * (len(prompt) + 32))
 	return string
 
+def get_input_char(prompt):
+	stdscr.addstr(screen_height-1, 0, prompt)
+	v = stdscr.getch(0, 0)
+	stdscr.addstr(screen_height-1, 0, " " * (len(prompt) + 32))
+	return v
+
 def get_direction():
 	prompt = "Enter a direction. (WASD, esc/enter to cancel)"
 	stdscr.addstr(screen_height-1, 0, prompt)
@@ -1638,15 +1644,14 @@ class Game:
 				w.player.use_item(item)
 			elif action == ord("e"):
 				# Equip an item.
-				slot = get_input("Number to equip to: ").strip()
-				if slot not in map(str, xrange(10)):
-					show_message("Must map to digit, 0-9.")
+				slot = get_input_char("Number to equip to (or ? to read): ")
+				if slot in map(ord, map(str, xrange(10))):
+					item = get_input("Item to bind: (empty to clear) ")
+					equip_slots[chr(slot)] = item
+				elif slot == ord("?"):
+					show_info_pane_message("\n".join("%i: %r" % (i, equip_slots[str(i)]) for i in range(1,10)+[0]))
 				else:
-					item = get_input("Item to bind: (empty to clear, ? to read) ")
-					if item == "?":
-						show_message("Slot %s has action: %r" % (slot, equip_slots[slot]))
-					else:
-						equip_slots[slot] = item
+					show_message("Must give digit, 0-9, or ?.")
 			elif action in digit_ords:
 				if equip_slots[chr(action)]:
 					w.player.use_item(equip_slots[chr(action)])
