@@ -854,7 +854,7 @@ class World:
 	NETHER_CRACK_PROBABILITY = 0.5
 	# For an enemy candidate location that can see x tiles the probability of spawning is:
 	#   1 - (1 - ENEMY_PROBABILITY) * e**(-x/ENEMY_TILE_CONSTANT)
-	ENEMY_PROBABILITY      = 0.25
+	ENEMY_PROBABILITY      = 0.4
 	ENEMY_TILE_CONSTANT    = 40
 	# One in this many chests spawned are worth double value.
 	SUPER_CHEST_ONE_IN     = 10
