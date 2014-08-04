@@ -223,7 +223,7 @@ class Gnat(EnemyType):
 	display_string = teal + "\"" + __
 	random_walk_probability = 0.1
 	max_hp = 1
-	xp_granted = 1
+	xp_granted = 17
 	difficulty = 0
 	has_melee_attack = True
 	melee_attack = {"damage": 1}
@@ -234,7 +234,7 @@ class Zombie(EnemyType):
 	# Make zombies stumble around a lot.
 	random_walk_probability = 0.35
 	max_hp = 2
-	xp_granted = 3
+	xp_granted = 5
 	difficulty = 10
 	has_melee_attack = True
 	melee_attack = {"damage": 1}
@@ -244,7 +244,7 @@ class BigZombie(EnemyType):
 	display_string = teal + "Z" + __
 	random_walk_probability = 0.2
 	max_hp = 8
-	xp_granted = 40
+	xp_granted = 35
 	difficulty = 100
 	armor = 1
 	has_melee_attack = True
@@ -758,9 +758,10 @@ class Player(Combatant):
 		self.inventory = {}
 		self.level = 1
 		self.xp = 0
+		self.max_xp = 30
 		self.max_hp = 8
 		self.max_mp = 6
-		self.mp_regen_rate = 0.1 # Units of MP per time step.
+#		self.mp_regen_rate = 0.1 # Units of MP per time step.
 		self.fractional_mp = 0.0
 		Combatant.__init__(self)
 		# For debugging, give the play 50 of every item.
@@ -813,10 +814,33 @@ class Player(Combatant):
 		# If no one is aggroed, just let the player have full MP.
 		if not w.someone_aggroed():
 			self.mp = self.max_mp
-		self.fractional_mp += self.mp_regen_rate
+		# It should always take 100 steps to full regenerate your MP.
+		self.fractional_mp += self.max_mp / 100.0 #self.mp_regen_rate
 		while self.fractional_mp >= 1:
 			self.fractional_mp -= 1
 			self.mp = min(self.max_mp, self.mp+1)
+
+	def compute_level_up_stats(self, level):
+		return {
+			# This is the XP requirement increases from level to level+1.
+			"max_xp": 10 + 5*level,
+			# This is the max HP gained by moving to level+1.
+ 			"max_hp": (1 + level)/2,
+			# Likewise for max MP.
+			"max_mp": (1 + level)/2,
+		}
+
+	def check_for_level_up(self):
+		# Check if we need to level up, and if so, do it.
+		while self.xp >= self.max_xp:
+			self.xp -= self.max_xp
+			self.level += 1
+			lines = ["You have reached level %i!" % self.level]
+			stats = self.compute_level_up_stats(self.level)
+			for var, delta in stats.iteritems():
+				setattr(self, var, getattr(self, var) + delta)
+				lines.append("Max %s increased by %i." % (var[4:].upper(), delta))
+			show_info_pane_message("\n".join(lines))
 
 # Some global computations.
 cut_patterns = []
@@ -1181,6 +1205,10 @@ class World:
 		for monster in self.monsters[:]:
 			if monster.should_die():
 				self.monsters.remove(monster)
+				# Grant the player XP for the monster.
+				self.player.xp += monster.xp_granted
+		# Make the player level up, if appropriate.
+		self.player.check_for_level_up()
 		# Eliminate the dead dynamic objects.
 		for dynamic in self.dynamic_objects[:]:
 			if dynamic.should_die():
@@ -1512,7 +1540,7 @@ class Game:
 		for l in xrange(self.max_pane_line_reached+1):
 			info_pane.addstr(l, 0, self.full(""))
 		# Draw the status line at the top.
-		info_pane.addstr(0, 0, self.full("HP %i/%i, MP %i/%i" % (w.player.hp, w.player.max_hp, w.player.mp, w.player.max_mp)))
+		info_pane.addstr(0, 0, self.full("HP %i/%i, MP %i/%i, XP %i/%i (lvl %i)" % (w.player.hp, w.player.max_hp, w.player.mp, w.player.max_mp, w.player.xp, w.player.max_xp, w.player.level)))
 		# Draw the HP and MP bars.
 		self.draw_bar(1, w.player.hp/float(w.player.max_hp), red)
 		self.draw_bar(2, w.player.mp/float(w.player.max_mp), blue)
@@ -1681,6 +1709,8 @@ class Game:
 						break
 				self.camera_mode = old_camera_mode
 				stdscr.addstr(screen_height-1, 0, " " * len(prompt))
+			elif action == ord("j"):
+				w.player.xp = w.player.max_xp
 			elif action == ord("x"):
 				# Cycle to the next camera mode.
 				cml = self.camera_mode_list
