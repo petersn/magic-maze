@@ -1627,8 +1627,9 @@ class Game:
 		self.info_pane_size = screen_width - self.map_size[0], screen_height
 		self.textbox_size = self.map_size[0], 1
 
-		w = World(20, 15)
-#		w = World(35, 25)
+#		w = World(20, 15)
+		w = World(35, 25)
+#		w = World(55, 35)
 
 		# Allocate a pad to store the rendered map.
 		# DEBUG: It seems to want an extra column, for some reason I can't figure out. :(
