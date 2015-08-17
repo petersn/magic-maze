@@ -370,19 +370,45 @@ class ItemType:
 		return "\n".join(lines)
 
 @item
+class HealingBalm(ItemType):
+	name = "balm"
+	long_name = "Healing Balm"
+	description = "A soothing balm with 10 HP of healing powers."
+	value = 10
+	rounds_to_use = 2
+	principal = 10
+
+	def activate(self):
+		# Refuse to activate the balm if the player has full HP.
+		if w.player.hp >= w.player.max_hp:
+			return False
+		w.player.hp = min(w.player.max_hp, w.player.hp + self.principal)
+		return True
+
+@item
+class GreaterHealingBalm(HealingBalm):
+	name = "g-balm"
+	long_name = "Greater Healing Balm"
+	description = "A large container of soothing balm with 30 HP of healing powers."
+	value = 30
+	rounds_to_use = 3
+	greater = True
+	principal = 30
+
+@item
 class MagicPotion(ItemType):
 	name = "potion"
 	long_name = "Magic Potion"
 	description = "A magical potion, bubbling with 10 MP worth of energies."
 	value = 10
 	rounds_to_use = 2
-	principle = 10
+	principal = 10
 
 	def activate(self):
 		# Refuse to activate the potion if the player has full MP.
 		if w.player.mp >= w.player.max_mp:
 			return False
-		w.player.mp = min(w.player.max_mp, w.player.mp + self.principle)
+		w.player.mp = min(w.player.max_mp, w.player.mp + self.principal)
 		return True
 
 @item
@@ -393,7 +419,7 @@ class GreaterMagicPotion(MagicPotion):
 	value = 30
 	rounds_to_use = 3
 	greater = True
-	principle = 30
+	principal = 30
 
 @item
 class ItemKey(ItemType):
@@ -920,7 +946,137 @@ class World:
 			stdscr.refresh()
 		# Generate the initial maze via a random depth first search.
 #P#		print "Generating maze."
+		def gen_grid_snp_style():
+			for x in xrange(1, self.w-1):
+				for y in xrange(1, self.h-1):
+					self.cells[x, y] = Tile(Tile.WALL)
+			#self.start_loc = self.random_center()
+			stack = [(None, self.start_loc)]
+			while stack:
+				prev, loc = stack.pop()
+				if self.cells[loc].basic == Tile.BLANK:
+					continue
+				if prev is not None:
+					self.cells[(prev[0]+loc[0])/2, (prev[1]+loc[1])/2] = Tile(Tile.BLANK)
+				self.cells[loc] = Tile(Tile.BLANK)
+				neighbors = self.get_neighbors(loc)
+				neighbors = [n for n in neighbors if self.cells[n].basic == Tile.WALL and self.cells[n[0]*2-loc[0], n[1]*2-loc[1]].basic == Tile.WALL]
+				random.shuffle(neighbors)
+				for n in neighbors:
+					stack.append((loc, (n[0]*2-loc[0], n[1]*2-loc[1])))
+				rare_update(10)
+			update()
+			# At this point the maze is a tree.
+			# Add some random gaps.
+	#P#		print "Placing cracks and rooms."
+			for prop, func in ((self.GAP_PROPORTION, self.random_wall), (self.HOLE_PROPORTION, self.random_tile)):
+				for i in xrange(int(prop * self.coarse_w * self.coarse_h)):
+					xy = func()
+					# Make sure the wall isn't fully surrouneded, or we would (trivially) disconnect the graph!
+					# This is important!
+					if any(self.cells[n].basic == Tile.BLANK for n in self.get_neighbors(xy)):
+						self.cells[xy] = Tile(Tile.BLANK)
+			update()
+			# Add some rooms.
+			for i in xrange(int(self.ROOM_PROPORTION * self.coarse_w * self.coarse_h)):
+				room_w, room_h = random.choice(self.ROOM_SIZES), random.choice(self.ROOM_SIZES)
+				xy = random.choice(range(1, self.w-room_w, 2)), random.choice(range(1, self.h-room_h, 2))
+				for x in xrange(room_w):
+					for y in xrange(room_h):
+						self.cells[xy[0]+x, xy[1]+y] = Tile(Tile.ROOM)
+				update()
+				# Find all the borders to the room.
+				borders = []
+				for x in xrange(-1, room_w+1):
+					x += xy[0]
+					for y in xrange(-1, room_h+1):
+						y += xy[1]
+						if self.cells[x, y].basic == Tile.BLANK:
+							borders.append((x, y))
+						# Upgrade walls around rooms to edges, for that dramatic effect.
+						if self.cells[x, y].basic == Tile.WALL:
+							self.cells[x, y].basic = self.ROOMS_MADE_OF
+				# Randomly close off borders, so long as we maintain connectedness.
+				while True:
+					random.shuffle(borders)
+					for border in borders[:]:
+						# See if this modification makes the graph disconnected.
+						self.cells[border] = Tile(self.ROOMS_MADE_OF)
+						if not self.is_connected():
+							# Disallowed, undo.
+							self.cells[border] = Tile(Tile.BLANK)
+							update()
+							continue
+						# Good, this one is allowed.
+						borders.remove(border)
+						break
+					else: break
+			return self.cells
+		def gen_grid_adam_style():
+			#f = open("/tmp/debug",'w')
+			#print>>f,"Entering gen_grid"
+			# Place the outermost border of Tile.EDGE tiles.
+
+			for x in xrange(1, self.w-1):
+				for y in xrange(1, self.h-1):
+					self.cells[x, y] = Tile(Tile.BLANK)
+				
+
+			def gen_subgrid(xmin, ymin, xmax, ymax):
+				# Recursively generate a subgrid. xmin and ymin are inlusive, xmax and ymax are exclusive.
+				# This algorithm subdivides the grid into smaller regions separated from each other by long walls, with all but one of these long walls having a gap (ensuring each region can reach each other region)
+				# Then it descends into the regions and iterates until the regions are too small to continue.
+				
+				#print>>f,"Entering gen_subgrid(%d,%d,%d,%d)"%(xmin,ymin,xmax,ymax)
+				w = xmax - xmin
+				h = ymax - ymin
+				if w < 3 or h < 3:
+					# Base case: Fill with blank tiles.
+					for x in xrange(xmin,xmax):
+						for y in xrange(ymin,ymax):
+							self.cells[x,y] = Tile(Tile.BLANK)
+				else:
+					# Pick a random point that we can shoot walls from.
+					pivotx = random.randrange(xmin + 1, xmax - 1) # make sure we're not up against an edge (note that the second argument to randrange is exclusive)
+					pivoty = random.randrange(ymin + 1, ymax - 1) # ditto
+					# Project out walls from that point.
+					for x in xrange(xmin,xmax):
+						self.cells[x,pivoty] = Tile(Tile.WALL)
+					for y in xrange(ymin,ymax):
+						self.cells[pivotx,y] = Tile(Tile.WALL)
+					update()
+					# Generate the subgrids
+					for new_xmin,new_xmax in [(xmin,pivotx),(pivotx+1,xmax)]:
+						for new_ymin,new_ymax in [(ymin,pivoty),(pivoty+1,ymax)]:
+							gen_subgrid(new_xmin,new_ymin,new_xmax,new_ymax)
+					# Now remove some walls.
+					def remove_random_wall(xmin,ymin,xmax,ymax):
+						# Usage: Given a long wall, put a gap in it. (Also ensure the tiles in front of / behind this new gap are blank too, otherwise the gap is inaccessible from one side.)
+						# Set xmin = xmax = x for a vertical wall, and ymin = ymax = y for a horizontal wall.
+						# min is inclusive, max is exclusive
+						if (xmin == xmax):
+							y = random.randrange(ymin,ymax)
+							for x in xrange(xmin-1,xmin+2):
+								self.cells[x,y] = Tile(Tile.BLANK)
+						elif (ymin == ymax):
+							x = random.randrange(xmin,xmax)
+							for y in xrange(ymin-1,ymin+2):
+								self.cells[x,y] = Tile(Tile.BLANK)
+						else:
+							raise "Wall is neither horizontal nor vertical?! (xmin,xmax,ymin,ymax) = (%d,%d,%d,%d)" % (xmin,xmax,ymin,ymax)
+					all_four_walls = [(pivotx,ymin,pivotx,pivoty),(pivotx,pivoty+1,pivotx,ymax),(xmin,pivoty,pivotx,pivoty),(pivotx+1,pivoty,xmax,pivoty)]	
+					walls_to_gapify = random.sample(all_four_walls,3)
+					for a in walls_to_gapify:
+						remove_random_wall(*a)
+						update()
+					#print>>f,"Exiting gen_subgrid(%d,%d,%d,%d)"%(xmin,ymin,xmax,ymax)
+
+			gen_subgrid(1,1,self.w-1,self.h-1)
+			#print>>f,"Exiting gen_grid"
+			# End of gen_grid_adam_style
+
 		self.cells = {}
+
 		# Place the outermost border of Tile.EDGE tiles.
 		edge_locs = []
 		for x in xrange(self.w):
@@ -931,72 +1087,11 @@ class World:
 			edge_locs.append((self.w-1, y))
 		for xy in edge_locs:
 			self.cells[xy] = Tile(Tile.EDGE)
-		for x in xrange(1, self.w-1):
-			for y in xrange(1, self.h-1):
-				self.cells[x, y] = Tile(Tile.WALL)
-		#self.start_loc = self.random_center()
+
 		self.start_loc = (1, 1)
 		self.player.xy = self.start_loc
-		stack = [(None, self.start_loc)]
-		while stack:
-			prev, loc = stack.pop()
-			if self.cells[loc].basic == Tile.BLANK:
-				continue
-			if prev is not None:
-				self.cells[(prev[0]+loc[0])/2, (prev[1]+loc[1])/2] = Tile(Tile.BLANK)
-			self.cells[loc] = Tile(Tile.BLANK)
-			neighbors = self.get_neighbors(loc)
-			neighbors = [n for n in neighbors if self.cells[n].basic == Tile.WALL and self.cells[n[0]*2-loc[0], n[1]*2-loc[1]].basic == Tile.WALL]
-			random.shuffle(neighbors)
-			for n in neighbors:
-				stack.append((loc, (n[0]*2-loc[0], n[1]*2-loc[1])))
-			rare_update(10)
-		update()
-		# At this point the maze is a tree.
-		# Add some random gaps.
-#P#		print "Placing cracks and rooms."
-		for prop, func in ((self.GAP_PROPORTION, self.random_wall), (self.HOLE_PROPORTION, self.random_tile)):
-			for i in xrange(int(prop * self.coarse_w * self.coarse_h)):
-				xy = func()
-				# Make sure the wall isn't fully surrouneded, or we would (trivially) disconnect the graph!
-				# This is important!
-				if any(self.cells[n].basic == Tile.BLANK for n in self.get_neighbors(xy)):
-					self.cells[xy] = Tile(Tile.BLANK)
-		update()
-		# Add some rooms.
-		for i in xrange(int(self.ROOM_PROPORTION * self.coarse_w * self.coarse_h)):
-			room_w, room_h = random.choice(self.ROOM_SIZES), random.choice(self.ROOM_SIZES)
-			xy = random.choice(range(1, self.w-room_w, 2)), random.choice(range(1, self.h-room_h, 2))
-			for x in xrange(room_w):
-				for y in xrange(room_h):
-					self.cells[xy[0]+x, xy[1]+y] = Tile(Tile.ROOM)
-			update()
-			# Find all the borders to the room.
-			borders = []
-			for x in xrange(-1, room_w+1):
-				x += xy[0]
-				for y in xrange(-1, room_h+1):
-					y += xy[1]
-					if self.cells[x, y].basic == Tile.BLANK:
-						borders.append((x, y))
-					# Upgrade walls around rooms to edges, for that dramatic effect.
-					if self.cells[x, y].basic == Tile.WALL:
-						self.cells[x, y].basic = self.ROOMS_MADE_OF
-			# Randomly close off borders, so long as we maintain connectedness.
-			while True:
-				random.shuffle(borders)
-				for border in borders[:]:
-					# See if this modification makes the graph disconnected.
-					self.cells[border] = Tile(self.ROOMS_MADE_OF)
-					if not self.is_connected():
-						# Disallowed, undo.
-						self.cells[border] = Tile(Tile.BLANK)
-						update()
-						continue
-					# Good, this one is allowed.
-					borders.remove(border)
-					break
-				else: break
+
+		gen_grid_snp_style()
 		# Do a sanity check, to catch bugs.
 		self.assert_connected()
 		# Now we start adding objects in other than blanks, walls, and edges.
