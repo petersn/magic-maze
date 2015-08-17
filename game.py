@@ -1026,7 +1026,7 @@ class World:
 						break
 					else: break
 			return self.cells
-		def gen_grid_adam_style():
+		def gen_grid_snp_style():
 			#f = open("/tmp/debug",'w')
 			#print>>f,"Entering gen_grid"
 			# Place the outermost border of Tile.EDGE tiles.
