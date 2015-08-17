@@ -156,6 +156,8 @@ class HiddenEnemy(DynamicObject):
 
 class EnemyType(Combatant):
 	display_string = red + "E" + red +"R"
+	name = "Generic Enemy"
+	description = "It's an enemy. What more do you want?"
 	# The speed at which this enemy walks towards the player. TODO: make work
 	walking_speed = 1
 	# The distance this enemy will try to get from the player. TODO: make work
@@ -232,6 +234,8 @@ class EnemyType(Combatant):
 @enemy
 class Gnat(EnemyType):
 	display_string = teal + "\"" + __
+	name = "Gnat"
+	description = "A big one, too. How irritating."
 	spawn_weight = 1.0
 	random_walk_probability = 0.1
 	max_hp = 1
@@ -243,6 +247,8 @@ class Gnat(EnemyType):
 @enemy
 class Zombie(EnemyType):
 	display_string = teal + "z" + __
+	name = "Zombie"
+	description = "Braaaaaaains..."
 	spawn_weight = 1.0
 	# Make zombies stumble around a lot.
 	random_walk_probability = 0.35
@@ -255,6 +261,8 @@ class Zombie(EnemyType):
 @enemy
 class BigZombie(EnemyType):
 	display_string = teal + "Z" + __
+	name = "Big Zombie"
+	description = "BRAAAAAAAINS..."
 	spawn_weight = 1.0
 	random_walk_probability = 0.2
 	max_hp = 8
@@ -263,6 +271,20 @@ class BigZombie(EnemyType):
 	armor = 1
 	has_melee_attack = True
 	melee_attack = {"damage": 2}
+
+@enemy
+class Ogre(EnemyType):
+	display_string = teal + "O" + __
+	name = "Ogre"
+	description = "It's huge, and boy does it looks angry!"
+	spawn_weight = 0.25
+	random_walk_probability = 0.3
+	max_hp = 15
+	xp_granted = 100
+	difficulty = 200
+	armor = 1
+	has_melee_attack = True
+	melee_attack = {"damage": 5}
 
 class Projectile:
 	def __init__(self, xy, target, desc):
@@ -639,6 +661,8 @@ class ScryingOrb(ItemType):
 
 	def activate(self):
 		result = get_location_selection("Scry where?", lambda xy: True)
+		if not result:
+			return False
 		w.see_from(result)
 		# Rerender the results, in case the scry would otherwise be off-screen.
 		w.pprint()
@@ -815,16 +839,28 @@ class Player(Combatant):
 			if itemtype.name == name and count > 0:
 				return itemtype
 
+	def lookup_item_fuzzy(self, name):
+		matches = []
+		for itemtype, count in self.inventory.iteritems():
+			if itemtype.name == name and count > 0:
+				return [itemtype] # Exact match
+			if name in itemtype.name and count > 0:
+				matches.append(itemtype)
+		return matches
+
 	def gain_item(self, itemtype, count):
 		if itemtype not in self.inventory:
 			self.inventory[itemtype] = 0
 		self.inventory[itemtype] += count
 
 	def use_item(self, name):
-		itemtype = self.lookup_item(name)
-		if itemtype is None:
+		matching_items = self.lookup_item_fuzzy(name)
+		if len(matching_items) == 0:
 			show_message("No matching item: %r" % name)
 			return
+		if len(matching_items) > 1:
+			show_message("Ambiguous: %r" % name)
+		itemtype = matching_items[0]
 		success = itemtype.use()
 		if success:
 			# Use up one, if the item type is consumable.
@@ -1782,6 +1818,10 @@ class Game:
 				w.player.use_item(item)
 			elif action == ord("e"):
 				# Equip an item.
+				# TODO: Make equip do a fuzzy lookup, map that to a name, and save the name.
+				# Becuase "use" is fuzzy now, that would avoid the following situation:
+				# I have one heavy stick. I equip "heavy" to 1, and now typing 1 uses the heavy stick.
+				# Then I get a heavy knife, and now typing 1 uses nothing ("Ambiguous.") 
 				slot = get_input_char("Number to equip to (or ? to read): ")
 				if slot in map(ord, map(str, xrange(10))):
 					item = get_input("Item to bind: (empty to clear) ")
@@ -1797,12 +1837,25 @@ class Game:
 				# Info on item.
 				item_name = get_input("Info on item: ").strip()
 				if not item_name: continue
-				item = w.player.lookup_item(item_name)
-				if item is None:
+				#item = w.player.lookup_item(item_name)
+				matching_items = w.player.lookup_item_fuzzy(item_name)
+				if len(matching_items) == 0:
 					show_message("No matching item.")
 					continue
-				show_info_pane_message(item.get_long_info())
+				elif len(matching_items) > 1:
+					show_message("Ambiguous.")
+					continue
+				show_info_pane_message(matching_items[0].get_long_info())
 				#show_message(item.long_name + ": " + item.description)
+			elif action == ord("I"):
+				# Info on monsters, etc.
+				place = get_location_selection("Info about what?", lambda xy: xy in w.revealed)
+				if not place:
+					continue
+				for m in w.monsters:
+					if m.xy == place:
+						show_info_pane_message(m.name + "\n" + m.description)
+						break # For the time being, only handle one monster. (Can monsters even overlap?)
 			elif action == ord("c"):
 				# Free camera control mode.
 				prompt = "Free camera control. (esc/enter to cancel)"
