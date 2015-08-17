@@ -92,14 +92,23 @@ class Combatant:
 	def should_die(self):
 		return self.hp <= 0
 
-enemy_type_list = []
+enemy_type_distribution = {}
 def enemy(cls):
-	enemy_type_list.append(cls)
+	enemy_type_distribution[cls] = cls.spawn_weight
 	return cls
+
+def sample_from_distribution(distrib):
+	total_weight = sum(distrib.itervalues())
+	r = random.uniform(0,total_weight)
+	for key in distrib:
+		r -= distrib[key]
+		if r <= 0:
+			return key
 
 def generate_enemy(xy, tiles=1, steps=1):
 	difficulty_rating = (steps * tiles) / 1000.0
-	enemy_type = random.choice([e for e in enemy_type_list if e.difficulty <= difficulty_rating])
+	available_enemy_distribution = dict((enemy, enemy_type_distribution[enemy]) for enemy in enemy_type_distribution if enemy.difficulty <= difficulty_rating)
+	enemy_type = sample_from_distribution(available_enemy_distribution)
 	# Determine whether or not to place a hidden enemy.
 	if random.random() <= enemy_type.hidden_probability:
 		# Place a hidden enemy.
@@ -153,6 +162,8 @@ class EnemyType(Combatant):
 	desired_distance = 0
 	# This is the probability that any given move will instead be a random walk step.
 	random_walk_probability = 0.0
+	# Weight for determining how often this enemy spawns (relative to other enemies)
+	spawn_weight = 1.0
 	# This is the probability that the enemy spawns as a hidden enemy,
 	# that jumps out when you surpass it in step count.
 	hidden_probability = 0.5
@@ -221,6 +232,7 @@ class EnemyType(Combatant):
 @enemy
 class Gnat(EnemyType):
 	display_string = teal + "\"" + __
+	spawn_weight = 1.0
 	random_walk_probability = 0.1
 	max_hp = 1
 	xp_granted = 17
@@ -231,6 +243,7 @@ class Gnat(EnemyType):
 @enemy
 class Zombie(EnemyType):
 	display_string = teal + "z" + __
+	spawn_weight = 1.0
 	# Make zombies stumble around a lot.
 	random_walk_probability = 0.35
 	max_hp = 2
@@ -242,6 +255,7 @@ class Zombie(EnemyType):
 @enemy
 class BigZombie(EnemyType):
 	display_string = teal + "Z" + __
+	spawn_weight = 1.0
 	random_walk_probability = 0.2
 	max_hp = 8
 	xp_granted = 35
@@ -1091,7 +1105,7 @@ class World:
 		self.start_loc = (1, 1)
 		self.player.xy = self.start_loc
 
-		gen_grid_snp_style()
+		gen_grid_adam_style()
 		# Do a sanity check, to catch bugs.
 		self.assert_connected()
 		# Now we start adding objects in other than blanks, walls, and edges.
