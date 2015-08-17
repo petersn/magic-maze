@@ -1026,7 +1026,7 @@ class World:
 						break
 					else: break
 			return self.cells
-		def gen_grid_snp_style():
+		def gen_grid_adam_style():
 			#f = open("/tmp/debug",'w')
 			#print>>f,"Entering gen_grid"
 			# Place the outermost border of Tile.EDGE tiles.
@@ -1105,7 +1105,7 @@ class World:
 		self.start_loc = (1, 1)
 		self.player.xy = self.start_loc
 
-		gen_grid_adam_style()
+		gen_grid_snp_style()
 		# Do a sanity check, to catch bugs.
 		self.assert_connected()
 		# Now we start adding objects in other than blanks, walls, and edges.
