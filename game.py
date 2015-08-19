@@ -422,6 +422,16 @@ class HealingBalm(ItemType):
 		return True
 
 @item
+class EnergyBar(HealingBalm):
+	name = "energy-bar"
+	long_name = "Energy Bar"
+	description = "Good for 3 HP. Better yet, it's chocolate chip!"
+	value = 5
+	rounds_to_use = 1
+	principal = 3
+
+
+@item
 class GreaterHealingBalm(HealingBalm):
 	name = "g-balm"
 	long_name = "Greater Healing Balm"
@@ -831,8 +841,9 @@ class Player(Combatant):
 		# For debugging, give the play 50 of every item.
 #		for item in item_type_list:
 #			self.inventory[item] = 50
-		# Give the player an initial offering of weapons.
+		# Give the player an initial offering of items.
 		self.inventory[get_item_type_by_name("stick")] = 1
+		self.inventory[get_item_type_by_name("energy-bar")] = 3
 
 	def lookup_item(self, name):
 		for itemtype, count in self.inventory.iteritems():
@@ -975,6 +986,9 @@ class World:
 		self.monsters = []
 		self.dynamic_objects = []
 
+	def draw_loading_screen(self):
+		pass
+
 	def build_world(self):
 		# XXX: DEBUG, GET RID OF LATER
 		self.steps_doors_dont_count, self.steps = {}, {}
@@ -986,6 +1000,8 @@ class World:
 			if "--show-world-gen" in sys.argv:
 				self.pprint(everything=True)
 				g.refresh_screen(fullscreen=True)
+			else:
+				self.draw_loading_screen()
 		def rare_update(freq):
 			counter[0] += 1
 			if counter[0] % freq == 0:
@@ -1818,14 +1834,17 @@ class Game:
 				w.player.use_item(item)
 			elif action == ord("e"):
 				# Equip an item.
-				# TODO: Make equip do a fuzzy lookup, map that to a name, and save the name.
-				# Becuase "use" is fuzzy now, that would avoid the following situation:
-				# I have one heavy stick. I equip "heavy" to 1, and now typing 1 uses the heavy stick.
-				# Then I get a heavy knife, and now typing 1 uses nothing ("Ambiguous.") 
 				slot = get_input_char("Number to equip to (or ? to read): ")
 				if slot in map(ord, map(str, xrange(10))):
-					item = get_input("Item to bind: (empty to clear) ")
-					equip_slots[chr(slot)] = item
+					item = get_input("Item to bind: (empty to clear) ").strip()
+					matching_items = w.player.lookup_item_fuzzy(item)
+					if len(matching_items) == 0:
+						show_message("No matching item.")
+					elif len(matching_items) > 1:
+						show_message("Ambiguous.")
+					else:
+						equip_slots[chr(slot)] = matching_items[0].name
+						show_message("Equipped %s in slot %s" % (matching_items[0].name, chr(slot)))
 				elif slot == ord("?"):
 					show_info_pane_message("\n".join("%i: %r" % (i, equip_slots[str(i)]) for i in range(1,10)+[0]))
 				else:
