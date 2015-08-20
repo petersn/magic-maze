@@ -9,6 +9,7 @@ gray, blue, green, red, purple, teal, yellow, foggy, player_color = colors
 __ = gray + " "
 
 class Thing:
+	# TODO: Reformat completely. 
 	THING_STRINGS = [
 		__ + yellow + "g",
 		teal + "e" + __,
@@ -234,7 +235,7 @@ class EnemyType(Combatant):
 @enemy
 class Gnat(EnemyType):
 	display_string = teal + "\"" + __
-	name = "Gnat"
+	name = "Cave Gnat"
 	description = "A big one, too. How irritating."
 	spawn_weight = 1.0
 	random_walk_probability = 0.1
@@ -1334,6 +1335,75 @@ class World:
 		self.full_rerender()
 		clear_entire_screen()
 
+
+	def generate_empty_grid(self):
+		cells = {}
+		edge_locs = []
+		for x in xrange(self.w):
+			edge_locs.append((x, 0))
+			edge_locs.append((x, self.h-1))
+		for y in xrange(1, self.h-1):
+			edge_locs.append((0, y))
+			edge_locs.append((self.w-1, y))
+		for xy in edge_locs:
+			cells[xy] = Tile(Tile.EDGE)
+		for x in xrange(1,self.w-1):
+			for y in xrange(1,self.h-1):
+				cells[x,y] = Tile(Tile.BLANK)
+		return cells
+
+	def build_world_abridged(self):
+		# Quickly builds a not terribly exciting world for testing purposes
+		self.steps_doors_dont_count, self.steps, self.visible_memo = {}, {}, {}
+		self.revealed = set()
+		self.player = Player()
+		# Generate grid
+		self.cells = self.generate_empty_grid()
+
+		pattern = [
+		"## #####",
+		"#       ",
+		"#   #   ",
+		"    #   ",
+		"##### ##",
+		"#   #   ",
+		"#       ",
+		"#   #   ",
+		]
+		for x in xrange(1,self.w-1):
+			for y in xrange(1,self.h-1):
+				if pattern[y%8][x%8] == " ":
+					self.cells[x,y] = Tile(Tile.BLANK)
+				else:
+					self.cells[x,y] = Tile(Tile.WALL)
+		self.cells[1,1] = Tile(Tile.START)
+		self.cells[self.w-2,self.h-2] = Tile(Tile.DESTINATION)
+		self.start_loc = (1,1)
+		self.player.xy = self.start_loc
+		self.dest_loc = (self.w-2,self.h-2)
+		def update():
+			if "--show-world-gen" in sys.argv:
+				self.pprint(everything=True)
+				g.refresh_screen(fullscreen=True)
+		# Precalculate visibility
+		for x in xrange(self.w):
+			for y in xrange(self.h):
+				# Only consider passible squares.
+				if self.cells[x, y].is_passable(doors_count=False):
+					self.visible_count[x, y] = len(self.visible_set((x, y)))
+			update()
+
+		# Compute paths
+		self.shortest_winning_path = self.shortest_path(self.player.xy, self.dest_loc)
+		self.shortest_doorless_path = self.shortest_path(self.player.xy, self.dest_loc, doors_count=False)
+		#clear screen
+		self.visible_count = {}
+		self.full_rerender()
+		for y in xrange(screen_height):
+			stdscr.addstr(y, 0, " "*(screen_width-1))
+		stdscr.refresh()
+		
+
 	def time_step(self):
 		# TODO: Reduce the number of places this is checked.
 		# In an ideal world, it would be checked every single instant,
@@ -1798,7 +1868,11 @@ class Game:
 		# Allocate a window to draw the info pane.
 		info_pane = curses.newwin(self.info_pane_size[0], self.info_pane_size[1], 0, self.map_size[0])
 
-		w.build_world()
+		if "--quick" in sys.argv:
+			w.build_world_abridged() 
+		else:
+			w.build_world()
+
 
 		equip_slots = {}
 		for i in xrange(10):
