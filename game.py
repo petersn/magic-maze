@@ -9,17 +9,25 @@ gray, blue, green, red, purple, teal, yellow, foggy, player_color = colors
 __ = gray + " "
 
 class Thing:
-	# TODO: Reformat completely. 
-	THING_STRINGS = [
-		__ + yellow + "g",
-		teal + "e" + __,
-	]
-	GOLD = 0
-	ENEMY = 1
-	def __init__(self, basic):
-		self.basic = basic
-		self.is_super = False
+	# A Thing is something that goes on a tile, like a gold chest. Generally speaking Things allow for some user interaction. Monsters are not Things.
+	display_string = __ + yellow + "?"
+	def __init__(self):
+		self.should_cull = False # Set this to true when you want the thing to disappear (e.g., an already looted chest)
+	def to_string(self):
+		return self.display_string
+	def interact(self,player):
+		# Called when a player interacts with the thing
+		pass
+	def info_pane_messages(self):
+		# Returns a list of lines to be shown in the info pane when the player is in the tile containing this thing.
+		return ["Thing:", " It's... a thing, I guess."]
 
+class Chest(Thing):
+	display_string = __ + yellow + "g"
+	def __init__(self):
+		self.is_super = False
+		self.should_cull = False
+	
 	def populate_gold(self, value_rating):
 		value_rating *= 10
 		# Rule: A chest will rarely contain an item that is worth more than the value_rating.
@@ -47,11 +55,23 @@ class Thing:
 		if random.random() <= 0.4 or sum(self.inventory.values()) == 0:
 			self.gold_content += value_rating
 
+	def interact(self,player):
+		for itemtype, count in self.inventory.iteritems():
+			player.gain_item(itemtype, count=count)
+		player.gold += self.gold_content
+		self.should_cull = True
+	
+	def info_pane_messages(self):
+		out = ["Chest: (l to loot)"] + gen_item_listing(self.inventory)
+		if self.gold_content != 0:
+			out += [" +%-2i gold" % self.gold_content]
+		return out
+		
 	def to_string(self):
 		# Special case for super chests:
 		if self.is_super:
 			return __ + yellow + "G" 
-		return self.THING_STRINGS[self.basic]
+		return self.display_string
 
 class Combatant:
 	# Armor works as straight damage reduction, with a minimum of 1 damage per hit.
@@ -237,7 +257,7 @@ class Gnat(EnemyType):
 	display_string = teal + "\"" + __
 	name = "Cave Gnat"
 	description = "A big one, too. How irritating."
-	spawn_weight = 1.0
+	spawn_weight = 1.0 
 	random_walk_probability = 0.1
 	max_hp = 1
 	xp_granted = 17
@@ -955,11 +975,19 @@ class World:
 	GLASS_WALL_LENGTH = 5
 	# Whether Tile.EDGE blocks can be trimmed in the trimming phase.
 	CORNER_CUT_ROOMS  = False
-	# Trim back super zig zaggy walls.
+	# Do map things that depend on context (i.e., neighboring tiles)
+	# For instance, trim back super zig-zaggy walls, or add gold chests at dead ends.
+	# Each operation is described by a tuple (pattern_set, factory, arg, probability)
+	# pattern_set is a set of patterns that should be matched.
+	#  A pattern is a list of 9 booleans describing a 3x3 square of tiles. True means the tile is passable.
+	# factory is the thing that's created in the center tile.
+	#  This can either be "Tile" (in which case the type of the center tile of the 3x3 square is changed) or a subclass of Thing (in which case such a thing is created in the center tile).
+	# arg is the type of tile when factory is Tile, or a list of arguments to pass to factory's constructor if factory is a subclass of Thing.
+	# probability is the probability the operation occurs.
 	TRIM_OPERATIONS = [
 		(cut_patterns, Tile, Tile.BLANK, 1.0),
 		(cut_patterns, Tile, Tile.BLANK, 1.0),
-		(chest_patterns, Thing, Thing.GOLD, 0.65),
+		(chest_patterns, Chest, [], 0.65),
 	]
 	# This is the probability that a nether crack will spawn in a magical area
 	# if at least one magical area exists on the border.
@@ -1192,8 +1220,8 @@ class World:
 				if random.random() > probability: continue
 				if factory == Tile:
 					self.cells[xy] = factory(arg)
-				elif factory == Thing:
-					self.cells[xy].contents.append(factory(arg))
+				else: # It's a Thing
+					self.cells[xy].contents.append(factory(*arg))
 				update()
 #P#		print "Placing special elements."
 		# Place some glass walls.
@@ -1260,11 +1288,11 @@ class World:
 			update()
 		# Add random goodies.
 		# Rule: Better goodies appear in high step count regions.
-		for obj, prob in [(Thing.GOLD, self.GOLD_PROPORTION)]:
+		for obj, prob in [(Chest, self.GOLD_PROPORTION)]:
 			for i in xrange(int(prob * self.coarse_w * self.coarse_h)):
 				xy = self.random_tile()
 				if self.cells[xy].basic == Tile.BLANK:
-					self.cells[xy].contents.append(Thing(obj))
+					self.cells[xy].contents.append(obj())
 					update()
 		# Add enemies, based on a simple algorithm:
 		# Compute the number of tiles visible from each open tile. Place an enemy at the
@@ -1318,7 +1346,7 @@ class World:
 		# Populate the treasure chests with items.
 		for xy, tile in self.cells.iteritems():
 			for thing in tile.contents:
-				if thing.basic == Thing.GOLD:
+				if isinstance(thing,Chest):
 					# Compute the treasure chest value.
 					value_rating = self.steps_doors_dont_count.get(xy, 100)/4
 					thing.populate_gold(value_rating)
@@ -1376,6 +1404,9 @@ class World:
 					self.cells[x,y] = Tile(Tile.BLANK)
 				else:
 					self.cells[x,y] = Tile(Tile.WALL)
+				if x%8 == 1 and y%8 == 6:
+					self.cells[x,y].contents = [Chest()]
+					self.cells[x,y].contents[0].populate_gold(10*(x+y))
 		self.cells[1,1] = Tile(Tile.START)
 		self.cells[self.w-2,self.h-2] = Tile(Tile.DESTINATION)
 		self.start_loc = (1,1)
@@ -1652,6 +1683,11 @@ class World:
 		self.dirty = set()
 #		stdscr.addstr(y, 0, " ".join(get(x, y) for x in xrange(self.w)))
 
+
+def gen_item_listing(inventory):
+	inv = sorted(inventory.items(), key=lambda x: x[0].sort_index)
+	return [" %2i) %s " % (count, itemtype.name) for itemtype, count in inv]
+
 def show_message(msg):
 	stdscr.addstr(screen_height-1, 0, msg)
 	stdscr.getch(0, 0)
@@ -1762,9 +1798,8 @@ class Game:
 		info_pane.addstr(self.line_index, 0, self.full(s))
 
 	def print_item_listing(self, inventory):
-		inv = sorted(inventory.items(), key=lambda x: x[0].sort_index)
-		for itemtype, count in inv:
-			self.add_line(" %2i) %s " % (count, itemtype.name))
+		for line in gen_item_listing(inventory):
+			self.add_line(line)
 
 	def redraw_info_pane_important_top_stuff(self):
 		# Clear out the old status pane.
@@ -1815,11 +1850,8 @@ class Game:
 		# Check if the player is over a treasure chest.
 		tile = w.cells[w.player.xy]
 		for thing in tile.contents:
-			if thing.basic == Thing.GOLD:
-				self.add_line("Chest: (l to loot)")
-				self.print_item_listing(thing.inventory)
-				if thing.gold_content != 0:
-					self.add_line(" +%-2i gold" % thing.gold_content)
+			for line in thing.info_pane_messages():
+				self.add_line(line)
 		self.max_pane_line_reached = self.line_index
 		info_pane.refresh()
 
@@ -1869,6 +1901,7 @@ class Game:
 		info_pane = curses.newwin(self.info_pane_size[0], self.info_pane_size[1], 0, self.map_size[0])
 
 		if "--quick" in sys.argv:
+			w = World(15,13)
 			w.build_world_abridged() 
 		else:
 			w.build_world()
@@ -1977,11 +2010,8 @@ class Game:
 				# Try to loot any treasure chests we may be standing on.
 				tile = w.cells[w.player.xy]
 				for thing in tile.contents:
-					if thing.basic == Thing.GOLD:
-						for itemtype, count in thing.inventory.iteritems():
-							w.player.gain_item(itemtype, count=count)
-						w.player.gold += thing.gold_content
-				tile.contents = [thing for thing in tile.contents if thing.basic != Thing.GOLD]
+					thing.interact(w.player)
+				tile.contents = [thing for thing in tile.contents if not thing.should_cull]
 			elif action == ord("`"):
 				# All the rare commands.
 				rare = get_input("Command: ").strip()
