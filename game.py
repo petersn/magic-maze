@@ -11,6 +11,8 @@ __ = gray + " "
 class Thing:
 	# A Thing is something that goes on a tile, like a gold chest. Generally speaking Things allow for some user interaction. Monsters are not Things.
 	display_string = __ + yellow + "?"
+	name = "Generic Thing"
+	description = "It is impressively generic."
 	def __init__(self):
 		self.should_cull = False # Set this to true when you want the thing to disappear (e.g., an already looted chest)
 	def to_string(self):
@@ -24,6 +26,8 @@ class Thing:
 
 class Chest(Thing):
 	display_string = __ + yellow + "g"
+	name = "Treasure Chest"
+	description = "I wonder what's inside!"
 	def __init__(self):
 		self.is_super = False
 		self.should_cull = False
@@ -72,6 +76,65 @@ class Chest(Thing):
 		if self.is_super:
 			return __ + yellow + "G" 
 		return self.display_string
+
+class Bloodstone(Thing):
+	# Sacrifice things, and get things back.
+	GOLD_EFFICIENCY = 0.1 # Gold in * efficiency = max value of item out
+	ITEM_EFFICIENCY = 0.7 # Ditto but when sacrificing an item rather than gold
+	FAIL_PROB = 0.1
+	display_string = __ + red + "@"
+	name = "Bloodstone Altar"
+	description = "Sacrifice something. Who knows, maybe you'll get lucky!"
+	
+	def produce_item(self, value):
+		# For now, just pick an item whose value is less than the input.
+		available_items = [item for item in item_type_list if item.value <= value]
+		if len(available_items) == 0 or random.random() < self.FAIL_PROB:
+			return None
+		else:
+			return random.choice(available_items)
+
+	def info_pane_messages(self):
+		return ["Bloodstone Altar", " (l to make a sacrifice)"]
+		
+	def interact(self,player):
+		item = get_input("Sacrifice what? (or \"gold\" for gold) ").strip()
+		if item == "gold":
+			quantity = get_input("How much gold? ").strip()
+			try:
+				quantity = int(quantity)
+			except ValueError:
+				show_message("Invalid integer.")
+				return
+			if quantity <= 0:
+				show_message("You can only sacrifice a positive amount of gold.")
+				return
+			elif quantity > player.gold:
+				show_message("You only have %d gold." % player.gold)
+				return
+			player.gold -= quantity
+			max_value = quantity * self.GOLD_EFFICIENCY
+		else:
+			matching_items = w.player.lookup_item_fuzzy(item)
+			if len(matching_items) == 0:
+				show_message("No matching item.")
+				return
+			elif len(matching_items) > 1:
+				show_message("Ambiguous.")
+				return
+			sacrifice = matching_items[0]
+			player.inventory[sacrifice] -= 1
+			if player.inventory[sacrifice] <= 0:
+				del player.inventory[sacrifice]
+			max_value = sacrifice.value * self.ITEM_EFFICIENCY
+		prize = self.produce_item(max_value)
+		if (prize == None):
+			show_message("You make the sacrifice, but nothing appears to happen.")
+		else:
+			show_message("You make the sacrifice and find a %s under the altar!" % prize.long_name)
+			if not prize in player.inventory: player.inventory[prize] = 0
+			player.inventory[prize] += 1
+
 
 class Combatant:
 	# Armor works as straight damage reduction, with a minimum of 1 damage per hit.
@@ -988,6 +1051,7 @@ class World:
 		(cut_patterns, Tile, Tile.BLANK, 1.0),
 		(cut_patterns, Tile, Tile.BLANK, 1.0),
 		(chest_patterns, Chest, [], 0.65),
+		(chest_patterns, Bloodstone, [], 0.1),
 	]
 	# This is the probability that a nether crack will spawn in a magical area
 	# if at least one magical area exists on the border.
@@ -1404,9 +1468,10 @@ class World:
 					self.cells[x,y] = Tile(Tile.BLANK)
 				else:
 					self.cells[x,y] = Tile(Tile.WALL)
-				if x%8 == 1 and y%8 == 6:
+				if x%8 == 1 and y%8 == 5:
 					self.cells[x,y].contents = [Chest()]
 					self.cells[x,y].contents[0].populate_gold(10*(x+y))
+		self.cells[9,1].contents.append(Bloodstone())
 		self.cells[1,1] = Tile(Tile.START)
 		self.cells[self.w-2,self.h-2] = Tile(Tile.DESTINATION)
 		self.start_loc = (1,1)
@@ -1982,6 +2047,8 @@ class Game:
 					if m.xy == place:
 						show_info_pane_message(m.name + "\n" + m.description)
 						break # For the time being, only handle one monster. (Can monsters even overlap?)
+				for o in w.cells[place].contents:
+					show_info_pane_message(o.name + "\n" + o.description)
 			elif action == ord("c"):
 				# Free camera control mode.
 				prompt = "Free camera control. (esc/enter to cancel)"
