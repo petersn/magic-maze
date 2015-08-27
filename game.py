@@ -234,6 +234,7 @@ class HiddenEnemy(DynamicObject):
 
 	def time_step(self):
 		if w.player.xy in w.visible_set(self.xy) and \
+			w.player.xy in w.steps and \
 			w.steps[self.xy] + self.steps_required_to_unhide <= w.steps[w.player.xy]:
 			self.do_cull = True
 			monster = self.enemy_type(self.xy)
@@ -1271,7 +1272,10 @@ class World:
 		self.start_loc = (1, 1)
 		self.player.xy = self.start_loc
 
-		gen_grid_snp_style()
+		if "--adam-style" in sys.argv:
+			gen_grid_adam_style()
+		else:
+			gen_grid_snp_style()
 		# Do a sanity check, to catch bugs.
 		self.assert_connected()
 		# Now we start adding objects in other than blanks, walls, and edges.
