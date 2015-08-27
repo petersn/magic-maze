@@ -1094,8 +1094,14 @@ class World:
 		self.monsters = []
 		self.dynamic_objects = []
 
+	loading_ctr = 0
 	def draw_loading_screen(self):
-		pass
+		if self.loading_ctr == 0:
+			stdscr.addstr(0,0,"Loading")
+			self.loading_ctr = 7
+		stdscr.addstr(int(self.loading_ctr/screen_width), self.loading_ctr % screen_width,".")
+		self.loading_ctr += 1
+		stdscr.refresh()
 
 	def build_world(self):
 		# XXX: DEBUG, GET RID OF LATER
@@ -2136,6 +2142,10 @@ class Game:
 					elif cheat == "unaggro":
 						for m in w.monsters:
 							m.aggro = False
+					elif cheat == "levelup":
+						w.player.xp = w.player.max_xp
+						w.player.check_for_level_up()
+						
 try:
 	stdscr = curses.initscr()
 	curses.start_color()
