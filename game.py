@@ -1278,7 +1278,8 @@ class World:
 					# Determine the neighbor pattern.
 					neighbors = self.get_von_neumann_neighbors((x, y))
 					occupancy = [self.cells[n].is_passable(doors_count=False) for n in neighbors]
-					if occupancy in pattern_set and (self.cells[x, y].basic != Tile.EDGE or self.CORNER_CUT_ROOMS):
+					if occupancy in pattern_set and (self.cells[x, y].basic != Tile.EDGE or self.CORNER_CUT_ROOMS) and \
+					 (factory == Tile or len(self.cells[x,y].contents) == 0): # For now, one thing per cell. (e.g., no overlapping chests and bloodstones)
 						to_change.append((x, y))
 			for xy in to_change:
 				if random.random() > probability: continue
