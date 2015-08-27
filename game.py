@@ -82,6 +82,7 @@ class Bloodstone(Thing):
 	GOLD_EFFICIENCY = 0.1 # Gold in * efficiency = max value of item out
 	ITEM_EFFICIENCY = 0.7 # Ditto but when sacrificing an item rather than gold
 	FAIL_PROB = 0.1
+	CURSED_WEIGHT = 10.0 # You are this many times more likely to find a cursed item than the corresponding uncursed item.
 	display_string = __ + red + "@"
 	name = "Bloodstone Altar"
 	description = "Sacrifice something. Who knows, maybe you'll get lucky!"
@@ -92,13 +93,20 @@ class Bloodstone(Thing):
 		if len(available_items) == 0 or random.random() < self.FAIL_PROB:
 			return None
 		else:
-			return random.choice(available_items)
+			distrib = {}
+			for item in available_items:
+				# The following is a dumb way to see if something is cursed. TODO: Modify the ItemModifier class so there's a better way to see if something is cursed.
+				if "cursed-" in item.name:
+					distrib[item] = self.CURSED_WEIGHT
+				else:
+					distrib[item] = 1.0
+			return sample_from_distribution(distrib)
 
 	def info_pane_messages(self):
 		return ["Bloodstone Altar", " (l to make a sacrifice)"]
 		
 	def interact(self,player):
-		item = get_input("Sacrifice what? (or \"gold\" for gold) ").strip()
+		item = get_input("Sacrifice what? (or \"gold\" for gold) ").strip() #TODO: Allow just entering in a number, optionally followed by "gold" 
 		if item == "gold":
 			quantity = get_input("How much gold? ").strip()
 			try:
@@ -808,12 +816,14 @@ class DemolitionWand(ItemType):
 class ItemModifier:
 	name_prefix = name_suffix = ""
 	long_name_prefix = long_name_suffix = ""
+	description_prefix = description_suffix = ""
 	value_multiplier = 1.0
 
 	def make_modified_version(self, itemtype):
 		newtype = itemtype.parent_class()
 		newtype.name = self.name_prefix + newtype.name + self.name_suffix
 		newtype.long_name = self.long_name_prefix + newtype.long_name + self.long_name_suffix
+		newtype.description = self.description_prefix + newtype.description + self.description_suffix
 		newtype.value = int(self.value_multiplier * newtype.value)
 		# Don't mutate the parent's copy of the attack!
 		if hasattr(itemtype, "melee_attack"):
@@ -824,6 +834,7 @@ class ItemModifier:
 class SwiftWeapon(ItemModifier):
 	name_prefix = "swift-"
 	long_name_prefix = "Swift "
+	description_suffix = " It handles well."
 	value_multiplier = 2.0
 
 	def effect(self, newtype):
@@ -832,6 +843,7 @@ class SwiftWeapon(ItemModifier):
 class HeavyWeapon(ItemModifier):
 	name_prefix = "heavy-"
 	long_name_prefix = "Heavy "
+	description_suffix = " It's heavy and rather hard to maneuver."
 	value_multiplier = 1.0
 
 	def effect(self, newtype):
@@ -841,6 +853,7 @@ class HeavyWeapon(ItemModifier):
 class SharpWeapon(ItemModifier):
 	name_prefix = "sharp-"
 	long_name_prefix = "Sharp "
+	description_suffix = " It looks quite sharp."
 	value_multiplier = 1.5
 
 	def effect(self, newtype):
@@ -849,6 +862,7 @@ class SharpWeapon(ItemModifier):
 class DullWeapon(ItemModifier):
 	name_prefix = "dull-"
 	long_name_prefix = "Dull "
+	description_suffix = " It looks quite dull."
 	value_multiplier = 0.5
 
 	def effect(self, newtype):
@@ -857,6 +871,7 @@ class DullWeapon(ItemModifier):
 class CursedWeapon(ItemModifier):
 	name_prefix = "cursed-"
 	long_name_prefix = "Cursed "
+	description_suffix = " It has a faint red aura."
 	value_multiplier = 1.0
 
 	def effect(self, newtype):
