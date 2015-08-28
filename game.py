@@ -178,6 +178,9 @@ class Combatant:
 
 	def do_melee_attack(self, target, melee_attack):
 		# Override this in a subclass of EnemyType to produce different effects, e.g., a poison debuff.
+		if "accuracy" in melee_attack:
+			if random.random() > melee_attack["accuracy"]:
+				return False
 		self.animate_simple_attack(self, target)
 		target.take_hit(melee_attack)
 
@@ -326,14 +329,26 @@ class EnemyType(Combatant):
 
 @enemy
 class Gnat(EnemyType):
-	display_string = teal + "\"" + __
+	display_string = teal + "\'" + __
 	name = "Cave Gnat"
 	description = "A big one, too. How irritating."
+	spawn_weight = 0.5 
+	random_walk_probability = 0.2
+	max_hp = 1
+	xp_granted = 10 
+	difficulty = 0
+	has_melee_attack = True
+	melee_attack = {"damage": 1, "accuracy": 0.5}
+@enemy
+class Mosquito(EnemyType):
+	display_string = teal + "\"" + __
+	name = "Mosquito"
+	description = "Kind of like a tiny vampire, if you think about it."
 	spawn_weight = 1.0 
 	random_walk_probability = 0.1
 	max_hp = 1
 	xp_granted = 17
-	difficulty = 0
+	difficulty = 2
 	has_melee_attack = True
 	melee_attack = {"damage": 1}
 
@@ -346,7 +361,7 @@ class Zombie(EnemyType):
 	# Make zombies stumble around a lot.
 	random_walk_probability = 0.35
 	max_hp = 2
-	xp_granted = 5
+	xp_granted = 25
 	difficulty = 10
 	has_melee_attack = True
 	melee_attack = {"damage": 1}
