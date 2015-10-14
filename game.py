@@ -3,6 +3,8 @@
 import math, random, time, sys, Queue
 import curses, curses.wrapper
 
+from keymap import keymap
+
 colors = [chr(i) for i in xrange(9)]
 gray, blue, green, red, purple, teal, yellow, foggy, player_color = colors
 
@@ -1053,7 +1055,7 @@ for index in (1, 3, 5, 7):
 	pattern[index] = False
 	cut_patterns.append(pattern)
 	chest_patterns.append([not i for i in pattern])
-direction_mapping = {ord("w"): (0, -1), ord("a"): (-1, 0), ord("s"): (0, 1), ord("d"): (1, 0)}
+direction_mapping = {keymap['move_up']: (0, -1), keymap['move_left']: (-1, 0), keymap['move_down']: (0, 1), keymap['move_right']: (1, 0)}
 
 class World:
 	GAP_PROPORTION    = 0.07
@@ -2038,14 +2040,14 @@ class Game:
 					w.player.xy = new_xy
 					# Only do a time step if we actually move.
 					w.time_step()
-			elif action == ord("."):
+			elif action == keymap['wait']:
 				w.time_step()
-			elif action == ord("u"):
+			elif action == keymap['use_item']:
 				# Use item.
 				item = get_input("Item to use: ").strip()
 				if not item: continue
 				w.player.use_item(item)
-			elif action == ord("e"):
+			elif action == keymap['equip']:
 				# Equip an item.
 				slot = get_input_char("Number to equip to (or ? to read): ")
 				if slot in map(ord, map(str, xrange(10))):
@@ -2065,7 +2067,7 @@ class Game:
 			elif action in digit_ords:
 				if equip_slots[chr(action)]:
 					w.player.use_item(equip_slots[chr(action)])
-			elif action == ord("i"):
+			elif action == keymap['info_item']:
 				# Info on item.
 				item_name = get_input("Info on item: ").strip()
 				if not item_name: continue
@@ -2079,7 +2081,7 @@ class Game:
 					continue
 				show_info_pane_message(matching_items[0].get_long_info())
 				#show_message(item.long_name + ": " + item.description)
-			elif action == ord("I"):
+			elif action == keymap['info_thing']:
 				# Info on monsters, etc.
 				place = get_location_selection("Info about what?", lambda xy: xy in w.revealed)
 				if not place:
@@ -2090,7 +2092,7 @@ class Game:
 						break # For the time being, only handle one monster. (Can monsters even overlap?)
 				for o in w.cells[place].contents:
 					show_info_pane_message(o.name + "\n" + o.description)
-			elif action == ord("c"):
+			elif action == keymap['free_camera']:
 				# Free camera control mode.
 				prompt = "Free camera control. (esc/enter to cancel)"
 				stdscr.addstr(screen_height-1, 0, prompt)
@@ -2106,21 +2108,21 @@ class Game:
 						break
 				self.camera_mode = old_camera_mode
 				stdscr.addstr(screen_height-1, 0, " " * len(prompt))
-			elif action == ord("j"):
+			elif action == keymap['xp_cheat']:
 				w.player.xp = w.player.max_xp
-			elif action == ord("x"):
+			elif action == keymap['camera_cycle']:
 				# Cycle to the next camera mode.
 				cml = self.camera_mode_list
 				self.camera_mode = cml[(cml.index(self.camera_mode)+1)%len(cml)]
 				show_message("New camera mode: %s" % self.camera_mode)
-			elif action == ord("l"):
+			elif action == keymap['use_thing']:
 				# Loot, or otherwise interact with something you're standing on.
 				# Try to loot any treasure chests we may be standing on.
 				tile = w.cells[w.player.xy]
 				for thing in tile.contents:
 					thing.interact(w.player)
 				tile.contents = [thing for thing in tile.contents if not thing.should_cull]
-			elif action == ord("`"):
+			elif action == keymap['rare_cmd']:
 				# All the rare commands.
 				rare = get_input("Command: ").strip()
 				if rare == "wait":

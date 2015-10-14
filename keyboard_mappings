@@ -1,0 +1,14 @@
+wait = .
+use_item = u
+use_thing = l
+info_item = i
+info_thing = I
+free_camera = c
+xp_cheat = j
+camera_cycle = x
+rare_cmd = `
+equip = e
+move_up = w
+move_left = a
+move_right = d
+move_down = s
