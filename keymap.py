@@ -25,3 +25,4 @@ try:
 		add_mappings(f)
 except IOError:
 	# No user keyboard mappings overriding the defaults. No problem!
+	pass
