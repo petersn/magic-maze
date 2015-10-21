@@ -7,6 +7,12 @@ Comments start with a #, and extraneous whitespace is okay.
 key should be a single character, except it may be surrounded by quotes. (This is useful for space/tab.)
 """
 
+import os 
+
+# Make sure we're in the correct directory
+_mydir = os.path.dirname(os.path.abspath(__file__))
+os.chdir(_mydir)
+
 keymap = dict()
 
 def add_mappings(f):
