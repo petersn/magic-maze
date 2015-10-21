@@ -68,7 +68,7 @@ class Chest(Thing):
 		self.should_cull = True
 	
 	def info_pane_messages(self):
-		out = ["Chest: (l to loot)"] + gen_item_listing(self.inventory)
+		out = ["Chest: (%s to loot)" % chr(keymap['use_thing'])] + gen_item_listing(self.inventory)
 		if self.gold_content != 0:
 			out += [" +%-2i gold" % self.gold_content]
 		return out
@@ -105,17 +105,12 @@ class Bloodstone(Thing):
 			return sample_from_distribution(distrib)
 
 	def info_pane_messages(self):
-		return ["Bloodstone Altar", " (l to make a sacrifice)"]
+		return ["Bloodstone Altar", " (%s to make a sacrifice)" % chr(keymap['use_thing'])]
 		
 	def interact(self,player):
-		item = get_input("Sacrifice what? (or \"gold\" for gold) ").strip() #TODO: Allow just entering in a number, optionally followed by "gold" 
-		if item == "gold":
-			quantity = get_input("How much gold? ").strip()
-			try:
-				quantity = int(quantity)
-			except ValueError:
-				show_message("Invalid integer.")
-				return
+		item = get_input("Sacrifice what item / how much gold? ").strip()
+		try:
+			quantity = int(item)
 			if quantity <= 0:
 				show_message("You can only sacrifice a positive amount of gold.")
 				return
@@ -124,7 +119,7 @@ class Bloodstone(Thing):
 				return
 			player.gold -= quantity
 			max_value = quantity * self.GOLD_EFFICIENCY
-		else:
+		except ValueError: #(Not an integer, must be an item)
 			matching_items = w.player.lookup_item_fuzzy(item)
 			if len(matching_items) == 0:
 				show_message("No matching item.")
